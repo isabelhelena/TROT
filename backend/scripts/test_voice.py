@@ -107,50 +107,106 @@ def test_unit_mock():
         mock_complete.assert_called_once_with("CA_test_mock_123", "completed")
         print(" Case 5 PASSED: Dial-complete maps 'completed' to 'completed'.")
 
-    # Case 6: WebSocket /ws/audio Media Stream
+    # Case 6: WebSocket /ws/audio Media Stream with Deepgram Integration
     import base64
     import json
+    from unittest.mock import AsyncMock
+    from backend.services.transcribe import DeepgramLiveSession
 
-    with client.websocket_connect("/ws/audio") as ws:
-        # 1. Connected event
-        ws.send_text(json.dumps({"event": "connected", "protocol": "Call"}))
-        # 2. Start event
-        ws.send_text(
-            json.dumps(
-                {
-                    "event": "start",
-                    "streamSid": "MZ_test_stream_123",
-                    "start": {
-                        "streamSid": "MZ_test_stream_123",
-                        "callSid": "CA_test_mock_123",
-                        "tracks": ["inbound"],
-                    },
-                }
-            )
-        )
-        # 3. Media chunks (mulaw 8kHz sample bytes)
-        dummy_audio = base64.b64encode(b"\xff" * 160).decode("utf-8")
-        for _ in range(5):
+    with (
+        patch.object(DeepgramLiveSession, "__init__", return_value=None),
+        patch.object(DeepgramLiveSession, "is_active", True),
+        patch.object(DeepgramLiveSession, "start", new_callable=AsyncMock) as mock_dg_start,
+        patch.object(DeepgramLiveSession, "send_audio", new_callable=AsyncMock) as mock_dg_send,
+        patch.object(DeepgramLiveSession, "stop", new_callable=AsyncMock) as mock_dg_stop,
+    ):
+        with client.websocket_connect("/ws/audio") as ws:
+            # 1. Connected event
+            ws.send_text(json.dumps({"event": "connected", "protocol": "Call"}))
+            # 2. Start event
             ws.send_text(
                 json.dumps(
                     {
-                        "event": "media",
+                        "event": "start",
                         "streamSid": "MZ_test_stream_123",
-                        "media": {"track": "inbound", "chunk": "1", "payload": dummy_audio},
+                        "start": {
+                            "streamSid": "MZ_test_stream_123",
+                            "callSid": "CA_test_mock_123",
+                            "tracks": ["inbound"],
+                        },
                     }
                 )
             )
-        # 4. Stop event
-        ws.send_text(
-            json.dumps(
-                {
-                    "event": "stop",
-                    "streamSid": "MZ_test_stream_123",
-                    "stop": {"callSid": "CA_test_mock_123"},
-                }
+            # 3. Media chunks (mulaw 8kHz sample bytes)
+            dummy_audio = base64.b64encode(b"\xff" * 160).decode("utf-8")
+            for _ in range(5):
+                ws.send_text(
+                    json.dumps(
+                        {
+                            "event": "media",
+                            "streamSid": "MZ_test_stream_123",
+                            "media": {"track": "inbound", "chunk": "1", "payload": dummy_audio},
+                        }
+                    )
+                )
+            # 4. Stop event
+            ws.send_text(
+                json.dumps(
+                    {
+                        "event": "stop",
+                        "streamSid": "MZ_test_stream_123",
+                        "stop": {"callSid": "CA_test_mock_123"},
+                    }
+                )
             )
+
+        mock_dg_start.assert_called_once()
+        assert mock_dg_send.call_count == 5, f"Expected 5 chunks sent, got {mock_dg_send.call_count}"
+        mock_dg_stop.assert_called_once()
+        print(" Case 6 PASSED: WebSocket /ws/audio forwarded audio to DeepgramLiveSession.")
+
+    # Case 7: Deepgram Transcript Processing & In-Progress Gating
+    import asyncio
+    from backend.services.transcribe import DeepgramLiveSession
+
+    session = DeepgramLiveSession(
+        call_sid="CA_test_mock_123",
+        senior_id="11111111-1111-1111-1111-111111111111",
+        guardian_id="22222222-2222-2222-2222-222222222222",
+    )
+
+    mock_msg = {
+        "type": "Results",
+        "is_final": True,
+        "channel": {
+            "alternatives": [
+                {"transcript": "Hello, I am calling from your credit card company."}
+            ]
+        },
+    }
+
+    # 7A: Call is ringing -> Gated (Do NOT insert)
+    with (
+        patch("backend.main.get_active_call_status", return_value="ringing"),
+        patch("backend.services.transcribe.insert_call_transcript") as mock_transcript_insert,
+    ):
+        asyncio.run(session._on_message(mock_msg))
+        mock_transcript_insert.assert_not_called()
+        print(" Case 7A PASSED: Transcript skipped while call is still ringing.")
+
+    # 7B: Call is in_progress -> Inserted!
+    with (
+        patch("backend.main.get_active_call_status", return_value="in_progress"),
+        patch("backend.services.transcribe.insert_call_transcript") as mock_transcript_insert,
+    ):
+        asyncio.run(session._on_message(mock_msg))
+        mock_transcript_insert.assert_called_once_with(
+            call_sid="CA_test_mock_123",
+            senior_id="11111111-1111-1111-1111-111111111111",
+            guardian_id="22222222-2222-2222-2222-222222222222",
+            text="Hello, I am calling from your credit card company.",
         )
-        print(" Case 6 PASSED: WebSocket /ws/audio processed connected, start, media, and stop events.")
+        print(" Case 7B PASSED: Final transcript inserted into Supabase once in_progress.")
 
 
 def test_live_server(

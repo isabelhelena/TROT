@@ -182,17 +182,20 @@ async def audio_websocket_endpoint(websocket: WebSocket):
     """
     Twilio Media Stream WebSocket handler.
     Receives connected, start, media, and stop events.
-    Decodes mulaw audio packets.
+    Decodes mulaw audio packets and forwards live stream to Deepgram Nova-2.
     """
     await websocket.accept()
     logger.info("[WS_CONNECTED] WebSocket connection established")
 
     call_sid: Optional[str] = None
     stream_sid: Optional[str] = None
+    dg_session = None
     chunk_count = 0
     total_bytes = 0
 
     try:
+        from backend.services.transcribe import DeepgramLiveSession
+
         while True:
             message_text = await websocket.receive_text()
             data = json.loads(message_text)
@@ -208,8 +211,28 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                 logger.info(
                     f"[WS_START] CallSid={call_sid} StreamSid={stream_sid}"
                 )
-                if call_sid and call_sid in call_states:
-                    call_states[call_sid]["stream_sid"] = stream_sid
+
+                senior_id = None
+                guardian_id = None
+                if call_sid:
+                    if call_sid in call_states:
+                        call_states[call_sid]["stream_sid"] = stream_sid
+                        senior_id = call_states[call_sid].get("senior_id")
+                        guardian_id = call_states[call_sid].get("guardian_id")
+
+                    if not senior_id or not guardian_id:
+                        call_rec = get_call_by_sid(call_sid)
+                        if call_rec:
+                            senior_id = call_rec.get("senior_id")
+                            guardian_id = call_rec.get("guardian_id")
+
+                    # Initialize and start Deepgram live streaming session
+                    dg_session = DeepgramLiveSession(
+                        call_sid=call_sid,
+                        senior_id=senior_id,
+                        guardian_id=guardian_id,
+                    )
+                    await dg_session.start()
 
             elif event == "media":
                 media_info = data.get("media", {})
@@ -218,7 +241,12 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                     raw_audio = base64.b64decode(payload_b64)
                     chunk_count += 1
                     total_bytes += len(raw_audio)
-                    # Log periodically (every 50 chunks ~ 1s of audio)
+
+                    # Forward audio bytes to Deepgram Nova-2
+                    if dg_session and dg_session.is_active:
+                        await dg_session.send_audio(raw_audio)
+
+                    # Log progress periodically (every 50 chunks ~ 1s of audio)
                     if chunk_count % 50 == 0:
                         logger.info(
                             f"[WS_MEDIA] CallSid={call_sid} Chunks={chunk_count} TotalBytes={total_bytes}"
@@ -228,6 +256,9 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                 logger.info(
                     f"[WS_STOP] CallSid={call_sid} StreamSid={stream_sid} TotalChunks={chunk_count} TotalBytes={total_bytes}"
                 )
+                if dg_session:
+                    await dg_session.stop()
+                    dg_session = None
                 break
 
     except WebSocketDisconnect:
@@ -236,6 +267,9 @@ async def audio_websocket_endpoint(websocket: WebSocket):
         )
     except Exception as e:
         logger.error(f"[WS_ERROR] CallSid={call_sid} Error in WebSocket loop: {e}", exc_info=True)
+    finally:
+        if dg_session:
+            await dg_session.stop()
 
 
 @app.post("/voice/dial-status")

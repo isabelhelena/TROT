@@ -108,3 +108,19 @@ def get_call_by_sid(call_sid: str) -> Optional[Dict[str, Any]]:
     client = get_supabase_client()
     res = client.table("calls").select("*").eq("call_sid", call_sid).execute()
     return res.data[0] if res.data else None
+
+
+def insert_call_transcript(
+    call_sid: str, senior_id: str, guardian_id: str, text: str
+) -> Dict[str, Any]:
+    """Inserts a confirmed final transcript utterance into call_transcripts."""
+    client = get_supabase_client()
+    data = {
+        "call_sid": call_sid,
+        "senior_id": senior_id,
+        "guardian_id": guardian_id,
+        "text": text,
+    }
+    res = client.table("call_transcripts").insert(data).execute()
+    return res.data[0] if res.data else {}
+

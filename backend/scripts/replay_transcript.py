@@ -49,7 +49,7 @@ async def replay_fixture(
         # Returns True on first alert, False on subsequent duplicates
         return len(recorded_alerts) == 1
 
-    def fake_end_call(sid, reason):
+    def fake_end_call(sid, reason="Scam detected", **kwargs):
         terminated_calls.append(sid)
         return True
 

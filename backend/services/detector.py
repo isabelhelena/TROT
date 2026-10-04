@@ -243,6 +243,9 @@ async def _run_detection_cycle(buf: CallBuffer, trigger: str) -> None:
 
         # 5. Execute Autonomous Defense Tools
         if tool_calls:
+            warn_senior_msg = None
+            end_call_reason = None
+
             for tool in tool_calls:
                 name = tool.get("name")
                 args = tool.get("args", {})
@@ -267,18 +270,30 @@ async def _run_detection_cycle(buf: CallBuffer, trigger: str) -> None:
                     if created:
                         buf.alert_fired = True
 
-                elif name == "end_call":
-                    reason = args.get("reason", "Autonomous termination of scammer")
-                    end_active_call(buf.call_sid, reason)
-
                 elif name == "warn_senior":
-                    message = args.get(
-                        "message",
-                        "Warning: This caller may be attempting fraud. Please hang up.",
-                    )
-                    play_warning_to_senior(buf.call_sid, message)
+                    warn_senior_msg = args.get("message")
+                    play_warning_to_senior(buf.call_sid, warn_senior_msg)
+
+                elif name == "end_call":
+                    end_call_reason = args.get("reason", "Autonomous termination of scammer")
 
                 elif name == "block_number":
                     logger.info(
                         f"[BLOCK_NUMBER_FLAGGED] CallSid={buf.call_sid} Number={buf.from_number}"
                     )
+
+            # If end_call was invoked, execute it with the senior spoken warning
+            if end_call_reason:
+                from backend.main import get_child_call_sid
+
+                child_sid = get_child_call_sid(buf.call_sid)
+                spoken = warn_senior_msg or (
+                    "This call has been disconnected for your safety because it showed signs of a phone scam. "
+                    "Please hang up and call your family guardian."
+                )
+                end_active_call(
+                    buf.call_sid,
+                    reason=end_call_reason,
+                    spoken_warning=spoken,
+                    child_call_sid=child_sid,
+                )

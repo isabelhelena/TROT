@@ -77,10 +77,16 @@ def record_scam_alert(
     return True
 
 
-def end_active_call(call_sid: str, reason: str = "Scam detected") -> bool:
+def end_active_call(
+    call_sid: str,
+    reason: str = "Scam detected",
+    spoken_warning: Optional[str] = None,
+    child_call_sid: Optional[str] = None,
+) -> bool:
     """
     Immediately terminates an ongoing call via the Twilio REST API.
-    Acts as the autonomous agent's kill switch on the scammer.
+    If child_call_sid (senior's handset leg) is provided and spoken_warning exists,
+    updates the senior's leg to play a calm safety message before disconnecting.
     """
     client = get_twilio_client()
     if not client:
@@ -90,6 +96,27 @@ def end_active_call(call_sid: str, reason: str = "Scam detected") -> bool:
         return False
 
     try:
+        # 1. Play spoken warning to the senior on their child leg
+        if child_call_sid and spoken_warning:
+            try:
+                twiml_warning = (
+                    f'<Response>'
+                    f'<Say voice="Polly.Joanna-Neural">'
+                    f'TROT security alert. {spoken_warning}'
+                    f'</Say>'
+                    f'<Hangup/>'
+                    f'</Response>'
+                )
+                client.calls(child_call_sid).update(twiml=twiml_warning)
+                logger.info(
+                    f"[WARN_SENIOR_PLAYED] Spoke warning on ChildCallSid={child_call_sid}: \"{spoken_warning}\""
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[WARN_SENIOR_FAILED] Could not update child leg {child_call_sid}: {e}"
+                )
+
+        # 2. Terminate the scammer's parent call leg
         client.calls(call_sid).update(status="completed")
         logger.info(
             f"[CALL_TERMINATED_BY_AGENT] CallSid={call_sid} Successfully disconnected. Reason: {reason}"

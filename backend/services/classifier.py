@@ -208,19 +208,28 @@ def classify_call_transcript(
         return []
 
 
-def generate_call_summary(full_transcript: str) -> str:
+def generate_call_summary(full_transcript: str, risk: str = "none") -> str:
     """
     Generates a concise 1-2 sentence plain-language summary of a completed call.
+    Adapts tone based on whether the call was intercepted as a scam.
     """
     client = get_genai_client()
     if not client or not full_transcript.strip():
         return "Call completed."
 
-    prompt = (
-        "Summarize this phone conversation for a family caregiver in 1 or 2 concise, reassuring sentences. "
-        "Highlight who called and the main topic discussed:\n\n"
-        f"\"{full_transcript}\""
-    )
+    if risk in ("scam", "suspicious"):
+        prompt = (
+            "This phone call was flagged as a potential fraud attempt and disconnected by TROT. "
+            "Write a concise 1-2 sentence summary for the family caregiver explaining what the scammer claimed/demanded, "
+            "and confirming that TROT safely intercepted the call:\n\n"
+            f"\"{full_transcript}\""
+        )
+    else:
+        prompt = (
+            "Summarize this phone conversation for a family caregiver in 1 or 2 concise, reassuring sentences. "
+            "Highlight who called and the main topic discussed:\n\n"
+            f"\"{full_transcript}\""
+        )
 
     try:
         response = client.models.generate_content(
@@ -230,6 +239,9 @@ def generate_call_summary(full_transcript: str) -> str:
                 system_instruction="You write concise, objective summaries of phone calls for elderly family members.",
                 temperature=0.2,
                 max_output_tokens=150,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                    disable=True
+                ),
             ),
         )
         summary = (response.text or "").strip()

@@ -81,6 +81,11 @@ def get_active_call_status(call_sid: str) -> Optional[str]:
     return None
 
 
+def get_child_call_sid(parent_call_sid: str) -> Optional[str]:
+    """Retrieves the child leg CallSid (senior's phone) for an active call."""
+    return call_states.get(parent_call_sid, {}).get("child_call_sid")
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "app": "TROT"}
@@ -328,8 +333,10 @@ async def handle_dial_status(request: Request):
     # When call connects, mark parent call as in_progress
     if parent_call_sid and call_status in ("in-progress", "answered"):
         set_active_call_status(parent_call_sid, "in_progress")
+        if parent_call_sid in call_states and child_call_sid:
+            call_states[parent_call_sid]["child_call_sid"] = child_call_sid
         logger.info(
-            f"[CALL_ANSWERED] ParentCallSid={parent_call_sid} -> Status set to in_progress"
+            f"[CALL_ANSWERED] ParentCallSid={parent_call_sid} ChildCallSid={child_call_sid} -> Status set to in_progress"
         )
     elif parent_call_sid and call_status in ("no-answer", "busy", "failed", "canceled"):
         normalized = "no_answer" if call_status in ("no-answer", "canceled") else call_status
@@ -385,7 +392,10 @@ async def handle_dial_complete(request: Request):
         if prev_status == "in_progress" or normalized_status == "completed":
             try:
                 from backend.services.classifier import generate_call_summary
-                from backend.db import get_supabase_client, update_call_summary
+                from backend.db import get_supabase_client, update_call_summary, get_call_by_sid
+
+                call_record = get_call_by_sid(call_sid)
+                risk_level = call_record.get("risk", "none") if call_record else "none"
 
                 client = get_supabase_client()
                 t_res = (
@@ -397,7 +407,7 @@ async def handle_dial_complete(request: Request):
                 )
                 if t_res.data and len(t_res.data) > 0:
                     full_text = " ".join(row["text"] for row in t_res.data)
-                    summary = generate_call_summary(full_text)
+                    summary = generate_call_summary(full_text, risk=risk_level)
                     update_call_summary(call_sid, summary)
                     logger.info(f"[CALL_SUMMARY] CallSid={call_sid}: {summary}")
             except Exception as e:

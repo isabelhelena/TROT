@@ -147,6 +147,7 @@ async def handle_voice(request: Request):
         "status": "ringing",
         "senior_id": senior_id,
         "guardian_id": guardian_id,
+        "from_number": from_number,
     }
 
     logger.info(
@@ -227,11 +228,35 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                             senior_id = call_rec.get("senior_id")
                             guardian_id = call_rec.get("guardian_id")
 
+                    from backend.services.detector import (
+                        start_detector,
+                        stop_detector,
+                        ingest_transcript,
+                    )
+
+                    from_number = ""
+                    if call_sid in call_states:
+                        from_number = call_states[call_sid].get("from_number") or ""
+                    if not from_number:
+                        call_rec = get_call_by_sid(call_sid)
+                        if call_rec:
+                            from_number = call_rec.get("from_number") or ""
+
+                    # Initialize detector with rolling buffer and heartbeat
+                    if senior_id and guardian_id:
+                        start_detector(
+                            call_sid=call_sid,
+                            senior_id=senior_id,
+                            guardian_id=guardian_id,
+                            from_number=from_number,
+                        )
+
                     # Initialize and start Deepgram live streaming session
                     dg_session = DeepgramLiveSession(
                         call_sid=call_sid,
                         senior_id=senior_id,
                         guardian_id=guardian_id,
+                        on_transcript=ingest_transcript,
                     )
                     await dg_session.start()
 
@@ -260,6 +285,9 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                 if dg_session:
                     await dg_session.stop()
                     dg_session = None
+                if call_sid:
+                    from backend.services.detector import stop_detector
+                    await stop_detector(call_sid)
                 break
 
     except WebSocketDisconnect:
@@ -271,6 +299,12 @@ async def audio_websocket_endpoint(websocket: WebSocket):
     finally:
         if dg_session:
             await dg_session.stop()
+        if call_sid:
+            try:
+                from backend.services.detector import stop_detector
+                await stop_detector(call_sid)
+            except Exception:
+                pass
 
 
 @app.post("/voice/dial-status")
@@ -339,12 +373,35 @@ async def handle_dial_complete(request: Request):
     )
 
     if call_sid:
+        prev_status = call_states.get(call_sid, {}).get("status")
         if call_sid in call_states:
             call_states[call_sid]["status"] = normalized_status
         try:
             complete_call(call_sid, normalized_status)
         except Exception as e:
             logger.warning(f"Failed to complete call {call_sid} in DB: {e}")
+
+        # Post-call summary: generate if call had active conversation
+        if prev_status == "in_progress" or normalized_status == "completed":
+            try:
+                from backend.services.classifier import generate_call_summary
+                from backend.db import get_supabase_client, update_call_summary
+
+                client = get_supabase_client()
+                t_res = (
+                    client.table("call_transcripts")
+                    .select("text")
+                    .eq("call_sid", call_sid)
+                    .order("created_at")
+                    .execute()
+                )
+                if t_res.data and len(t_res.data) > 0:
+                    full_text = " ".join(row["text"] for row in t_res.data)
+                    summary = generate_call_summary(full_text)
+                    update_call_summary(call_sid, summary)
+                    logger.info(f"[CALL_SUMMARY] CallSid={call_sid}: {summary}")
+            except Exception as e:
+                logger.warning(f"Failed to generate summary for {call_sid}: {e}")
 
     twiml = VoiceResponse()
     twiml.hangup()

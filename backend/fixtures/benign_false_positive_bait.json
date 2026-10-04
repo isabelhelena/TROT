@@ -1,0 +1,12 @@
+{
+  "name": "false_positive_bait",
+  "type": "benign",
+  "expected_alert": false,
+  "from_number": "+12105553344",
+  "lines": [
+    "Hey Mom, did the city inspector ever approve that building permit warrant for the garden shed?",
+    "Also, Aunt Linda mentioned we should get a twenty-five dollar Target gift card for Tommy's birthday party.",
+    "Dad was joking that with all this yard work, he feels like he is in jail doing hard labor!",
+    "Anyway, let me know what time works best for you to head over to the store together."
+  ]
+}

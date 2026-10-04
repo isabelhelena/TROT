@@ -1,0 +1,15 @@
+{
+  "name": "bank_fraud",
+  "type": "scam",
+  "expected_alert": true,
+  "expected_scam_type": "bank_fraud",
+  "from_number": "+18885550122",
+  "lines": [
+    "Good morning, this is the security and fraud department at your bank.",
+    "We have detected suspicious wire transfer requests leaving your checking account this morning.",
+    "Someone has compromised your routing number and account access.",
+    "To protect your remaining savings, you must not tell anyone at the local branch.",
+    "Drive to your nearest Bitcoin ATM machine right now and withdraw your funds as cash.",
+    "We will deposit the cash into a secure federal insurance locker."
+  ]
+}

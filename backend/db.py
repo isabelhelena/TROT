@@ -124,3 +124,128 @@ def insert_call_transcript(
     res = client.table("call_transcripts").insert(data).execute()
     return res.data[0] if res.data else {}
 
+
+def get_caller_number_record(
+    senior_id: str, from_number: str
+) -> Optional[Dict[str, Any]]:
+    """Fetches the caller number record for a specific senior."""
+    client = get_supabase_client()
+    res = (
+        client.table("numbers")
+        .select("*")
+        .eq("senior_id", senior_id)
+        .eq("number", from_number)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def get_network_threat_count(from_number: str) -> int:
+    """
+    Computes shared network-wide reputation for a caller.
+    Sums threat_count across all senior records for this phone number.
+    """
+    client = get_supabase_client()
+    try:
+        res = (
+            client.table("numbers")
+            .select("threat_count")
+            .eq("number", from_number)
+            .execute()
+        )
+        if res.data:
+            return sum(int(row.get("threat_count") or 0) for row in res.data)
+    except Exception as e:
+        logger.warning(
+            f"Failed to query network threat count for {from_number}: {e}"
+        )
+    return 0
+
+
+def insert_alert(
+    call_sid: str,
+    senior_id: str,
+    guardian_id: str,
+    contact_number: str,
+    scam_type: str,
+    severity: str,
+    confidence: float,
+    trigger: str,
+    summary: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Inserts a fraud alert row. Enforces exactly one alert per call.
+    Uses ON CONFLICT (call_sid) DO NOTHING to prevent duplicates.
+    """
+    client = get_supabase_client()
+    data = {
+        "call_sid": call_sid,
+        "senior_id": senior_id,
+        "guardian_id": guardian_id,
+        "contact_number": contact_number,
+        "scam_type": scam_type,
+        "severity": severity,
+        "confidence": round(float(confidence), 2),
+        "trigger": trigger,
+        "summary": summary,
+        "acknowledged": False,
+    }
+    try:
+        # Note: alerts_one_per_call unique constraint exists on call_sid
+        res = client.table("alerts").upsert(data, on_conflict="call_sid", ignore_duplicates=True).execute()
+        if res.data and len(res.data) > 0:
+            return res.data[0]
+    except Exception as e:
+        logger.info(f"Alert already exists or insert skipped for {call_sid}: {e}")
+    return None
+
+
+def update_call_risk(call_sid: str, risk: str) -> Optional[Dict[str, Any]]:
+    """Updates the risk level of a call ('none', 'suspicious', 'scam')."""
+    client = get_supabase_client()
+    try:
+        res = (
+            client.table("calls")
+            .update({"risk": risk})
+            .eq("call_sid", call_sid)
+            .execute()
+        )
+        return res.data[0] if res.data else None
+    except Exception as e:
+        logger.error(f"Failed to update risk for call {call_sid}: {e}")
+    return None
+
+
+def increment_number_threat(senior_id: str, from_number: str) -> None:
+    """Increments the threat count for a number and marks status as suspicious."""
+    client = get_supabase_client()
+    try:
+        existing = get_caller_number_record(senior_id, from_number)
+        current_count = int(existing.get("threat_count", 0)) if existing else 0
+        new_count = current_count + 1
+
+        client.table("numbers").update(
+            {"threat_count": new_count, "status": "suspicious"}
+        ).eq("senior_id", senior_id).eq("number", from_number).execute()
+    except Exception as e:
+        logger.warning(
+            f"Failed to increment threat count for {from_number}: {e}"
+        )
+
+
+def update_call_summary(call_sid: str, summary: str) -> Optional[Dict[str, Any]]:
+    """Persists plain-language Gemini summary to calls table."""
+    client = get_supabase_client()
+    try:
+        res = (
+            client.table("calls")
+            .update({"summary": summary})
+            .eq("call_sid", call_sid)
+            .execute()
+        )
+        return res.data[0] if res.data else None
+    except Exception as e:
+        logger.warning(f"Failed to update summary for call {call_sid}: {e}")
+    return None
+
+

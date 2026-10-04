@@ -1,0 +1,12 @@
+{
+  "name": "doctor_appointment",
+  "type": "benign",
+  "expected_alert": false,
+  "from_number": "+12105554321",
+  "lines": [
+    "Hello Mrs. Henderson, this is Sarah from Dr. Ramirez's clinic.",
+    "I am calling to confirm your annual wellness checkup scheduled for tomorrow at two thirty PM.",
+    "Please remember to bring your Medicare card and a list of your current medications.",
+    "If you need to reschedule, please give our main desk a call back before five. Have a great day!"
+  ]
+}

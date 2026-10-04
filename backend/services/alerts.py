@@ -155,20 +155,25 @@ def end_active_call(
         return False
 
     try:
-        # 1. Play spoken warning to the senior on their child leg
+        # 1. Play chime and spoken warning to the senior on their child leg
         if child_call_sid and spoken_warning:
             try:
+                public_base = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+                play_chime = (
+                    f"<Play>{public_base}/nay.mp3</Play>" if public_base else ""
+                )
                 twiml_warning = (
-                    f'<Response>'
+                    f"<Response>"
+                    f"{play_chime}"
                     f'<Say voice="Polly.Joanna-Neural">'
-                    f'TROT security alert. {spoken_warning}'
-                    f'</Say>'
-                    f'<Hangup/>'
-                    f'</Response>'
+                    f"TROT security alert. {spoken_warning}"
+                    f"</Say>"
+                    f"<Hangup/>"
+                    f"</Response>"
                 )
                 client.calls(child_call_sid).update(twiml=twiml_warning)
                 logger.info(
-                    f"[WARN_SENIOR_PLAYED] Spoke warning on ChildCallSid={child_call_sid}: \"{spoken_warning}\""
+                    f"[WARN_SENIOR_PLAYED] Played nay.mp3 chime + spoke warning on ChildCallSid={child_call_sid}: \"{spoken_warning}\""
                 )
             except Exception as e:
                 logger.warning(

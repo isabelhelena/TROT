@@ -40,7 +40,7 @@ Voice only. SMS/text screening is explicitly OUT of scope (roadmap slide only).
 
 ## Roles
 
-- **Guardian (trusted person):** dashboard with live calls, live transcript, alerts, suspicious numbers. Can acknowledge alerts and mark numbers trusted.
+- **Guardian (trusted person):** dashboard with live calls, live transcript, alerts, suspicious numbers. Can acknowledge alerts, mark numbers trusted, and trigger an active call disconnect ("Hang up on Scammer").
 - **Senior (vulnerable person):** calm, minimal screen. States: protected / active call / possible scam (with a `tel:` link to call the guardian).
 
 ## End-to-end flow
@@ -75,15 +75,19 @@ Voice only. SMS/text screening is explicitly OUT of scope (roadmap slide only).
 9. On a scam verdict: write the alert, mark `calls.risk`, bump `numbers.threat_count`, notify the guardian (Realtime dashboard + outbound Twilio voice call), and the senior screen flips to "possible scam" via Realtime.
 10. At call end, Gemini writes a short plain-language `calls.summary`.
 
-## Detection
+## Detection & Agentic Defense
 
 - Per-call in-memory rolling buffer of final transcript text. Use the last ~60 seconds for the LLM.
+- **Shared Network Reputation:** On call arrival, query network-wide reputation (`sum(threat_count)` across `numbers` for caller). If known threat, pass count into Gemini prompt context.
 - **Keyword path:** word-boundary regex over new transcript text for red flags (gift card, warrant, wire transfer, bitcoin, arrest, social security, "don't tell anyone", IRS, etc.). On a hit, and once the buffer has at least ~15 words, call Gemini immediately.
 - **Heartbeat path:** every ~20 seconds, call Gemini only if new transcript arrived since the last check.
-- Keywords decide WHEN to ask Gemini. They never decide the verdict. Gemini is the only verdict-maker.
-- Gemini returns structured JSON: `{risk: "none"|"suspicious"|"scam", confidence: 0-1, scam_type, reason}`. Parse defensively; on parse failure treat as `none` and log.
-- Alert threshold: `risk == "scam"` and `confidence >= 0.7` (tune against the test scripts).
-- **One alert per call.** Insert with `on conflict (call_sid) do nothing` (unique index exists) and only do side effects (call risk update, threat_count bump, guardian notification) if the insert actually created a row. The keyword and heartbeat paths can race.
+- Keywords decide WHEN to ask Gemini. Gemini is the autonomous verdict & action maker.
+- **Gemini Tool Calling:** Gemini evaluates threat and calls proportionate defense tools:
+  - `notify_guardian(scam_type, severity, confidence, reason)`: writes alert row, updates call risk, buzzes guardian.
+  - `warn_senior(message)`: plays spoken warning into the call leg.
+  - `end_call(reason)`: immediately hangs up on the scammer via Twilio REST API.
+  - `block_number(reason)`: marks number as `suspicious` for future calls.
+- **One alert per call.** Insert with `on conflict (call_sid) do nothing` (unique index exists).
 - Skip all analysis if the caller's `numbers.status == 'trusted'`.
 
 ## Hard rules (decisions already made, do not revisit without asking)
@@ -174,13 +178,13 @@ _Checkpoint:_ scammer phone calls the Twilio number, the senior phone rings and 
 Add `<Start><Stream>`, `/voice/dial-status`, `/voice/dial-complete`, `/ws/audio`, Deepgram streaming, `call_transcripts` inserts (final utterances only).
 _Checkpoint:_ talking on the call produces transcript lines in the terminal and in Supabase; an unanswered call ends as `no_answer` after ~15s.
 
-**Phase 2: Scam detection**
-Detector (buffer, keyword path, heartbeat, `in_progress` gate, trusted-number skip), Gemini classifier, alert insert with `on conflict do nothing`, `calls.risk`, `numbers.threat_count`. Develop against `replay_transcript.py` first.
-_Checkpoint:_ a scripted scam call produces exactly one alert; a normal call produces none.
+**Phase 2: Scam detection & Agentic Defense**
+Detector (buffer, keyword path, heartbeat, `in_progress` gate, trusted-number skip, community network reputation query), Gemini classifier with function calling (`notify_guardian`, `warn_senior`, `end_call`, `block_number`), alert insert with `on conflict do nothing`, `calls.risk`, `numbers.threat_count`. Develop against `replay_transcript.py` first.
+_Checkpoint:_ a scripted scam call triggers Gemini tool calls producing exactly one alert and action; a normal call produces none.
 
 **Phase 3: Auth, pairing, dashboards** (can start in parallel with Phase 1; it only depends on the schema)
-Supabase Auth (Google + email fallback), role picker, `/api/pair` and code generation route handlers, consent screen, guardian dashboard (live calls, live transcript, alert feed with acknowledge, suspicious numbers with mark-trusted), senior status screen (protected / active call / possible scam with `tel:` link).
-_Checkpoint (minimum viable demo):_ a scam call makes the guardian dashboard show the live transcript and an alert, and the senior screen flips to the warning.
+Supabase Auth (Google + email fallback), role picker, `/api/pair` and code generation route handlers, consent screen, guardian dashboard (live calls, live transcript, alert feed with acknowledge, suspicious numbers with mark-trusted, remote "Hang up on Scammer" button), senior status screen (protected / active call / possible scam with `tel:` link).
+_Checkpoint (minimum viable demo):_ a scam call makes the guardian dashboard show the live transcript and an alert, senior screen flips to warning, and guardian can disconnect the call.
 
 **Phase 4: Buzz + polish**
 Outbound Twilio voice call to the guardian on alert (`notify.py`), browser notification backup, seed demo data, demo script, backup video. Feature freeze at the start of this phase.

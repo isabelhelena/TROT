@@ -40,14 +40,16 @@ def test_unit_mock():
             },
         )
         assert res.status_code == 200, f"Expected 200, got {res.status_code}"
+        assert "<Start>" in res.text and "<Stream" in res.text and "/ws/audio" in res.text, "Missing Start/Stream tag in TwiML!"
         assert "<Dial" in res.text and "+12105559999" in res.text, f"Missing Dial tag in: {res.text}"
+        assert res.text.find("<Start>") < res.text.find("<Dial"), "<Start><Stream> must come BEFORE <Dial>!"
         assert 'timeout="15"' in res.text, "Dial must have timeout=15"
         assert "action=" in res.text and "dial-complete" in res.text, "Dial must have action pointing to dial-complete"
         assert "statusCallback=" in res.text and "dial-status" in res.text, "Number must have statusCallback pointing to dial-status"
         assert "callerId" not in res.text, "callerId must NOT be set on Dial!"
         mock_upsert.assert_called_once()
         mock_insert.assert_called_once()
-        print(" Case 1 PASSED: Known senior dialed correctly with timeout=15 and callbacks.")
+        print(" Case 1 PASSED: TwiML contains <Start><Stream> before <Dial>, timeout=15, and callbacks.")
         print(f"TwiML Output:\n{res.text}")
 
     # Case 2: Unknown Number
@@ -104,6 +106,51 @@ def test_unit_mock():
         assert res.status_code == 200
         mock_complete.assert_called_once_with("CA_test_mock_123", "completed")
         print(" Case 5 PASSED: Dial-complete maps 'completed' to 'completed'.")
+
+    # Case 6: WebSocket /ws/audio Media Stream
+    import base64
+    import json
+
+    with client.websocket_connect("/ws/audio") as ws:
+        # 1. Connected event
+        ws.send_text(json.dumps({"event": "connected", "protocol": "Call"}))
+        # 2. Start event
+        ws.send_text(
+            json.dumps(
+                {
+                    "event": "start",
+                    "streamSid": "MZ_test_stream_123",
+                    "start": {
+                        "streamSid": "MZ_test_stream_123",
+                        "callSid": "CA_test_mock_123",
+                        "tracks": ["inbound"],
+                    },
+                }
+            )
+        )
+        # 3. Media chunks (mulaw 8kHz sample bytes)
+        dummy_audio = base64.b64encode(b"\xff" * 160).decode("utf-8")
+        for _ in range(5):
+            ws.send_text(
+                json.dumps(
+                    {
+                        "event": "media",
+                        "streamSid": "MZ_test_stream_123",
+                        "media": {"track": "inbound", "chunk": "1", "payload": dummy_audio},
+                    }
+                )
+            )
+        # 4. Stop event
+        ws.send_text(
+            json.dumps(
+                {
+                    "event": "stop",
+                    "streamSid": "MZ_test_stream_123",
+                    "stop": {"callSid": "CA_test_mock_123"},
+                }
+            )
+        )
+        print(" Case 6 PASSED: WebSocket /ws/audio processed connected, start, media, and stop events.")
 
 
 def test_live_server(

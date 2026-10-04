@@ -1,8 +1,10 @@
 import os
+import json
+import base64
 import logging
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, Request, Response
-from twilio.twiml.voice_response import VoiceResponse, Dial
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
+from twilio.twiml.voice_response import VoiceResponse, Dial, Start
 
 from backend.db import (
     get_senior_by_twilio_number,
@@ -36,6 +38,17 @@ def get_public_base_url(request: Request) -> str:
     forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
     forwarded_host = request.headers.get("x-forwarded-host", request.url.netloc)
     return f"{forwarded_proto}://{forwarded_host}".rstrip("/")
+
+
+def get_public_ws_url(request: Request) -> str:
+    """Returns the public wss:// URL for the media stream."""
+    base_url = get_public_base_url(request)
+    if base_url.startswith("https://"):
+        return f"wss://{base_url[8:]}/ws/audio"
+    elif base_url.startswith("http://"):
+        return f"ws://{base_url[7:]}/ws/audio"
+    else:
+        return f"wss://{base_url}/ws/audio"
 
 
 def set_active_call_status(call_sid: str, status: str) -> None:
@@ -78,7 +91,7 @@ def health():
 async def handle_voice(request: Request):
     """
     Twilio voice webhook for incoming calls.
-    Lookup senior by To number, log call record, and dial senior's real phone
+    Lookup senior by To number, log call record, starts media stream, and dials senior
     with dial-status and dial-complete callbacks.
     """
     # TODO: validate X-Twilio-Signature
@@ -140,12 +153,19 @@ async def handle_voice(request: Request):
         f"[CALL_STARTED] CallSid={call_sid} From={from_number} To={to_number} -> Dialing {senior_real_phone}"
     )
 
-    # Build TwiML with dial timeout and callbacks
     base_url = get_public_base_url(request)
+    ws_url = get_public_ws_url(request)
     dial_complete_url = f"{base_url}/voice/dial-complete"
     dial_status_url = f"{base_url}/voice/dial-status"
 
     twiml = VoiceResponse()
+
+    # 1. Asynchronous media stream of caller's audio (inbound track)
+    start = Start()
+    start.stream(url=ws_url)
+    twiml.append(start)
+
+    # 2. Dial senior's phone with timeout and callbacks (leave callerId out)
     dial = Dial(timeout=15, action=dial_complete_url)
     dial.number(
         senior_real_phone,
@@ -155,6 +175,67 @@ async def handle_voice(request: Request):
     twiml.append(dial)
 
     return Response(content=str(twiml), media_type="application/xml")
+
+
+@app.websocket("/ws/audio")
+async def audio_websocket_endpoint(websocket: WebSocket):
+    """
+    Twilio Media Stream WebSocket handler.
+    Receives connected, start, media, and stop events.
+    Decodes mulaw audio packets.
+    """
+    await websocket.accept()
+    logger.info("[WS_CONNECTED] WebSocket connection established")
+
+    call_sid: Optional[str] = None
+    stream_sid: Optional[str] = None
+    chunk_count = 0
+    total_bytes = 0
+
+    try:
+        while True:
+            message_text = await websocket.receive_text()
+            data = json.loads(message_text)
+            event = data.get("event")
+
+            if event == "connected":
+                logger.info("[WS_CONNECTED] Twilio protocol connected")
+
+            elif event == "start":
+                stream_sid = data.get("streamSid")
+                start_info = data.get("start", {})
+                call_sid = start_info.get("callSid")
+                logger.info(
+                    f"[WS_START] CallSid={call_sid} StreamSid={stream_sid}"
+                )
+                if call_sid and call_sid in call_states:
+                    call_states[call_sid]["stream_sid"] = stream_sid
+
+            elif event == "media":
+                media_info = data.get("media", {})
+                payload_b64 = media_info.get("payload", "")
+                if payload_b64:
+                    raw_audio = base64.b64decode(payload_b64)
+                    chunk_count += 1
+                    total_bytes += len(raw_audio)
+                    # Log periodically (every 50 chunks ~ 1s of audio)
+                    if chunk_count % 50 == 0:
+                        logger.info(
+                            f"[WS_MEDIA] CallSid={call_sid} Chunks={chunk_count} TotalBytes={total_bytes}"
+                        )
+
+            elif event == "stop":
+                logger.info(
+                    f"[WS_STOP] CallSid={call_sid} StreamSid={stream_sid} TotalChunks={chunk_count} TotalBytes={total_bytes}"
+                )
+                break
+
+    except WebSocketDisconnect:
+        logger.info(
+            f"[WS_DISCONNECTED] CallSid={call_sid} WebSocket disconnected cleanly (TotalChunks={chunk_count})"
+        )
+    except Exception as e:
+        logger.error(f"[WS_ERROR] CallSid={call_sid} Error in WebSocket loop: {e}", exc_info=True)
 
 
 @app.post("/voice/dial-status")

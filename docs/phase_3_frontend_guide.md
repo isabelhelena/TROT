@@ -299,11 +299,33 @@ Before demonstrating Phase 3:
 ## Hackathon implementation scope (agreed October 4, 2026)
 
 The implementation uses the reduced scope documented in the root README:
-email/password login for two pre-linked accounts; guardian call/transcript/alert
+email/password login for existing accounts; guardian call/transcript/alert
 views; senior ready/active/warning states; initial snapshots plus scoped Realtime;
 and `backend/scripts/demo_calls.py` replay/reset commands. Signup, OAuth, role
-selection, pairing endpoints, and suspicious-number management are deferred.
-The pairing examples above are planning material and are not implemented.
+selection and suspicious-number management are deferred.
+The code-based pairing examples above are historical planning material, superseded
+by the guardian-managed email flow below.
 The existing voice bridge and database schema remain unchanged. Real transcript,
 call lifecycle, and detection producers are separate backend work; simulated
 replay verifies the frontend without those dependencies.
+
+## Current pairing flow
+
+The guardian opens **Connect a senior**, enters the existing senior Auth account’s
+email, and submits to `POST /api/pair`. The server verifies the guardian session,
+looks up the senior using the server-only Auth admin client, and sets
+`profiles.guardian_id` with the service role. Accounts, phone numbers, and existing
+consent are prepared beforehand. The senior only signs in and sees a waiting
+screen until connected; no pairing code or phone entry is needed.
+
+The stored link survives sign-out. Both dashboards refresh connection state via
+Realtime and a five-second connection-only fallback. With `DEMO_SENIOR_ID` set,
+the owning guardian can confirm **Reset demo pairing** (`POST /api/pair/reset`)
+and reconnect for another demonstration. Reset only clears the connection; phone
+setup, consent, and history stay intact. Active calls block pairing changes.
+No Python backend or database schema changes are required.
+
+Verification: use separate browser sessions for guardian and senior; reset the
+configured demo connection, check the senior’s waiting screen, reconnect by email,
+and check both screens update without refresh. Sign out/in to verify persistence.
+Then run a new demo replay to verify both dashboards receive the new call.

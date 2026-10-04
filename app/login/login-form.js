@@ -19,7 +19,7 @@ export default function LoginForm() {
       const { data: { user } } = await supabase.auth.getUser();
       const { data: profile, error: profileError } = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
       if (profileError || !['guardian', 'senior'].includes(profile?.role)) {
-        throw new Error('Your account needs a preconfigured guardian or senior profile. Ask your teammate to check setup.');
+        throw new Error('Your account needs a preconfigured guardian or senior profile.');
       }
       router.replace(`/${profile.role}`);
       router.refresh();
@@ -30,6 +30,6 @@ export default function LoginForm() {
     <label>Password<input type="password" name="password" autoComplete="current-password" required /></label>
     {error && <p role="alert" className="error">{error}</p>}
     <button disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-    <p className="muted small">Accounts and family connections are set up ahead of the demo.</p>
+    
   </form>;
 }

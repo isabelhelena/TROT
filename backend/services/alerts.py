@@ -76,10 +76,10 @@ def record_scam_alert(
         f"Risk={risk_level} Summary=\"{summary}\""
     )
 
-    # Dispatch Guardian Notification (WhatsApp Alert via Twilio Sandbox)
+    # Dispatch Guardian Notification (Twilio Voice Buzz Call)
     try:
         from backend.db import get_profile_by_id
-        from backend.services.notify import send_guardian_whatsapp_alert
+        from backend.services.notify import send_guardian_voice_buzz
 
         guardian_profile = get_profile_by_id(guardian_id) if guardian_id else None
         senior_profile = get_profile_by_id(senior_id) if senior_id else None
@@ -91,13 +91,10 @@ def record_scam_alert(
         )
 
         if guardian_phone:
-            send_guardian_whatsapp_alert(
+            send_guardian_voice_buzz(
                 guardian_phone=guardian_phone,
                 senior_name=senior_name,
-                contact_number=contact_number,
                 scam_type=scam_type,
-                confidence=confidence,
-                summary=summary,
             )
         else:
             logger.info(
@@ -105,7 +102,7 @@ def record_scam_alert(
             )
     except Exception as e:
         logger.warning(
-            f"[NOTIFY_ERROR] Failed to dispatch guardian notification for {call_sid}: {e}"
+            f"[NOTIFY_ERROR] Failed to dispatch guardian voice buzz for {call_sid}: {e}"
         )
 
     return True

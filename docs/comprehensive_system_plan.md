@@ -269,37 +269,28 @@ sequenceDiagram
 
 ---
 
-### Phase 4: Guardian Notifications (Twilio WhatsApp Alert) & Demo Polish
-**Status:** IN PROGRESS 🚀 (WhatsApp service implemented in `notify.py`)
+### Phase 4: Guardian Voice Buzz & Demo Polish
+**Status:** IN PROGRESS 🚀 (Twilio Voice Buzz active in `notify.py` and `alerts.py`)
 
-* **Objective:** Real-time outbound security notification to the guardian upon scam interception, bypassing US carrier A2P 10DLC restrictions via Twilio WhatsApp Sandbox, seed realistic demo data, rehearse live demo scripts, and record backup video.
+* **Objective:** Real-time outbound telephony buzz to the guardian upon scam interception, completely exempt from US carrier A2P 10DLC restrictions and requiring zero external accounts (no Meta Business needed), seed realistic demo data, rehearse live demo scripts, and record backup video.
 * **Key Files:**
-  - `backend/services/notify.py`: Outbound Twilio WhatsApp Sandbox alert (`send_guardian_whatsapp_alert`) with optional Voice Buzz fallback (`send_guardian_voice_buzz`).
-  - `backend/services/alerts.py`: Dispatches WhatsApp security alert to the linked guardian on the first confirmed scam detection.
+  - `backend/services/notify.py`: Outbound Twilio Voice Buzz call (`send_guardian_voice_buzz`) with Amazon Polly neural voice alert.
+  - `backend/services/alerts.py`: Dispatches Voice Buzz to the linked guardian on the first confirmed scam detection.
   - `backend/scripts/seed_demo_data.py`: Seeds past calls, suspicious numbers, and realistic history for the dashboard.
 * **Detailed Engineering Specs:**
-  1. **WhatsApp Sandbox Security Alert (`notify.py`):**
-     - Sends formatted markdown alert via Twilio's verified WhatsApp business number (`TWILIO_WHATSAPP_FROM="whatsapp:+14155238886"`):
-       ```text
-       🚨 *TROT SECURITY ALERT*
-
-       A live scam attempt was intercepted on *{senior_name}*'s phone:
-
-       • *Caller:* {contact_number}
-       • *Scam Type:* {clean_scam_type}
-       • *Confidence:* {pct_confidence}%
-       • *Details:* {summary}
-
-       🛡️ *Action:* TROT played a safety warning to {senior_name} and terminated the call.
-       📱 *Dashboard:* {PUBLIC_BASE_URL}/guardian
+  1. **Automated Voice Buzz Call (`notify.py`):**
+     - When an alert is created for a call, TROT immediately places an outbound call to the guardian's phone:
+       ```xml
+       <Response>
+         <Say voice="Polly.Joanna-Neural">
+           Security alert from TROT. A potential {clean_scam_type} scam was detected on {senior_name}'s phone and disconnected for safety. Please check your TROT guardian dashboard immediately.
+         </Say>
+         <Hangup/>
+       </Response>
        ```
-     - **Carrier Immunity:** WhatsApp operates over data protocol (OTT), completely immune to US cellular carrier 10DLC registration blocks and filtering.
-  2. **One-Time Guardian Sandbox Pairing:**
-     - Guardian texts `join <sandbox-keyword>` from their handset to `+1 415 523 8886` once to activate the 72-hour session.
-  3. **Voice Buzz Fallback:**
-     - Telephony voice call (`calls.create`) with Amazon Polly neural TTS remains available as an alternate channel.
-  4. **Demo Seeding:** Pre-populates the database with 5 past legitimate calls and 3 flagged suspicious numbers so the dashboard looks rich and established during pitch judging.
-  5. **Rehearsal & Backup:** Rehearse the live 3-device demo (Scammer phone, Senior phone, Guardian laptop + phone) and record an MP4 screen recording as insurance against network glitches.
+     - **Carrier Immunity:** Telephony voice calls are 100% exempt from A2P 10DLC registration, requires no Meta/business approvals, and rings the guardian's handset immediately.
+  2. **Demo Seeding:** Pre-populates the database with 5 past legitimate calls and 3 flagged suspicious numbers so the dashboard looks rich and established during pitch judging.
+  3. **Rehearsal & Backup:** Rehearse the live 3-device demo (Scammer phone, Senior phone, Guardian laptop + phone) and record an MP4 screen recording as insurance against network glitches.
 
 ---
 

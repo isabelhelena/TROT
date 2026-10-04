@@ -75,6 +75,39 @@ def record_scam_alert(
         f"[ALERT_WRITTEN] CallSid={call_sid} AlertId={alert_row.get('id')} "
         f"Risk={risk_level} Summary=\"{summary}\""
     )
+
+    # Dispatch Guardian Notification (WhatsApp Alert via Twilio Sandbox)
+    try:
+        from backend.db import get_profile_by_id
+        from backend.services.notify import send_guardian_whatsapp_alert
+
+        guardian_profile = get_profile_by_id(guardian_id) if guardian_id else None
+        senior_profile = get_profile_by_id(senior_id) if senior_id else None
+
+        guardian_phone = guardian_profile.get("phone") if guardian_profile else None
+        senior_name = (
+            (senior_profile.get("name") if senior_profile else None)
+            or "Your Senior"
+        )
+
+        if guardian_phone:
+            send_guardian_whatsapp_alert(
+                guardian_phone=guardian_phone,
+                senior_name=senior_name,
+                contact_number=contact_number,
+                scam_type=scam_type,
+                confidence=confidence,
+                summary=summary,
+            )
+        else:
+            logger.info(
+                f"[NOTIFY_SKIPPED] No phone configured for guardian_id={guardian_id}"
+            )
+    except Exception as e:
+        logger.warning(
+            f"[NOTIFY_ERROR] Failed to dispatch guardian notification for {call_sid}: {e}"
+        )
+
     return True
 
 

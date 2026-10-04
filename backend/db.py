@@ -44,6 +44,13 @@ def get_senior_by_twilio_number(to_number: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def get_profile_by_id(profile_id: str) -> Optional[Dict[str, Any]]:
+    """Fetches a profile record by its uuid id."""
+    client = get_supabase_client()
+    res = client.table("profiles").select("*").eq("id", profile_id).execute()
+    return res.data[0] if res.data else None
+
+
 def upsert_caller_number(senior_id: str, guardian_id: str, from_number: str) -> None:
     """Upserts caller into the numbers table for reputation tracking."""
     client = get_supabase_client()

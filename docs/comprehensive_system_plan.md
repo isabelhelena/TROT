@@ -196,64 +196,35 @@ sequenceDiagram
 ---
 
 ### Phase 2: Autonomous Detection Engine & Agentic Defense
-**Status:** IN PROGRESS 🚀
+**Status:** COMPLETE ✅ (Verified on test harness & live phone call)
 
-* **Objective:** Autonomous real-time threat detection using a rolling memory buffer, hybrid triggers (regex keywords + 20s heartbeat), network-wide reputation context, and autonomous Gemini function calling.
-* **Model:** `gemini-3.5-flash-lite` via `google-genai` SDK (model id from `GEMINI_MODEL` env var, defaulting to `gemini-3.5-flash-lite`).
-* **Files to Create / Modify:**
-  - `backend/services/detector.py` [NEW]: Rolling buffer manager (last 60s), regex keyword matcher, 20s heartbeat asyncio task, debounce lock.
-  - `backend/services/classifier.py` [NEW]: Gemini agent using `google.genai` SDK with declared function tools: `notify_guardian`, `warn_senior`, `end_call`, `block_number`.
-  - `backend/services/alerts.py` [NEW]: Alert deduplication insert (`ON CONFLICT (call_sid) DO NOTHING`), threat count increment, risk status update.
-  - `backend/scripts/replay_transcript.py` [NEW]: Offline test harness to replay scripted transcripts with realistic timing.
-  - `backend/fixtures/*.json` [NEW]: Fixture transcripts (3 scam scripts, 2 benign scripts).
-* **Detailed Engineering Specs:**
-
-#### 1. Rolling Memory Buffer & Triggers (`services/detector.py`)
-* Maintain a per-call in-memory buffer:
-  ```python
-  class CallBuffer:
-      call_sid: str
-      utterances: List[Tuple[float, str]] # (timestamp, text)
-      word_count: int
-      last_analyzed_time: float
-      alert_fired: bool
-  ```
-* Retention window: Keep utterances from the last 60 seconds.
-* **Trigger 1: Keyword Path (Immediate):**
-  - Word-boundary regex matching high-risk patterns:
-    `\b(gift\s+card|warrant|wire\s+transfer|bitcoin|crypto|arrest|social\s+security|don't\s+tell\s+anyone|irs|internal\s+revenue|federal\s+agent|jail|bail|target\s+card|apple\s+card)\b` (case-insensitive).
-  - Triggers Gemini immediately if there is a match AND buffer has at least 15 words.
-* **Trigger 2: Heartbeat Path (Periodic):**
-  - Runs every 20 seconds as an `asyncio.create_task`.
-  - Runs Gemini only if new transcript text has arrived since the last check.
-* **Gating:** Skip analysis if `call.status != 'in_progress'` or caller's `numbers.status == 'trusted'`.
-
-#### 2. Shared Community Reputation Context
-* Before querying Gemini, query the network-wide reputation of the caller:
-  ```python
-  total_threats = query_network_threat_count(from_number)
-  ```
-* If `total_threats > 0`, prepend to Gemini context:
-  `"[SYSTEM NOTE: Caller number {from_number} has been flagged {total_threats} times across the TROT network for prior fraud attempts.]"`
-
-#### 3. Gemini Autonomous Tool Calling (`services/classifier.py`)
-* Model: `gemini-3.5-flash-lite` via `google-genai` SDK.
-* Declared Tools:
-  - `notify_guardian(scam_type: str, severity: str, confidence: float, reason: str)`
-  - `warn_senior(message: str)`
-  - `end_call(reason: str)`
-  - `block_number(reason: str)`
-* System Prompt:
-  > *"You are TROT Autonomous Call Guardian. You protect vulnerable seniors from phone fraud in real time. Analyze the rolling transcript of the caller. If the caller is manipulating, threatening, or requesting money/cards, invoke the appropriate defense tools. For high-confidence imminent harm, invoke end_call immediately. Never invent tools."*
-* Tool Execution:
-  - `notify_guardian`: Calls `create_alert(...)` in `alerts.py`.
-  - `end_call`: Calls `twilio_client.calls(call_sid).update(status="completed")`.
-  - `warn_senior`: Calls Twilio API to update senior's leg with `<Say voice="Polly.Joanna-Neural">{message}</Say><Hangup/>`.
-  - `block_number`: Updates caller row in `numbers` table to `status='suspicious'`.
-* **Alert Deduplication:** Alert insert uses `INSERT INTO alerts ... ON CONFLICT (call_sid) DO NOTHING`. Side effects run only if a new row was inserted.
-* **Post-Call Summary:** On `dial-complete`, if call was `in_progress`, prompt Gemini for a 1-sentence plain-language summary and write to `calls.summary`.
-
-* **Checkpoint Criteria:** Running `replay_transcript.py` against scam fixtures triggers autonomous tool calls and exactly 1 alert row; benign fixtures trigger 0 tool calls.
+* **Objective:** Autonomous real-time threat detection using a rolling memory buffer, hybrid triggers (regex keywords + 20s heartbeat), network-wide reputation context, autonomous Gemini function calling, and spoken senior safety warning.
+* **Model:** `gemini-3.5-flash-lite` via official `google-genai` SDK (`gemini-3.5-flash-lite`).
+* **Files Created & Enhanced:**
+  - `backend/services/detector.py`: Rolling buffer manager (last 60s), regex keyword matcher, 20s heartbeat asyncio task, debounce lock, child leg tracking.
+  - `backend/services/classifier.py`: Gemini agent using `google-genai` SDK with declared function tools (`notify_guardian`, `warn_senior`, `end_call`, `block_number`) and risk-aware call summarizer.
+  - `backend/services/alerts.py`: Alert deduplication insert (`ON CONFLICT (call_sid) DO NOTHING`), threat count increment, call risk update, and autonomous kill switch (`end_active_call`) with Amazon Polly TTS spoken safety message played to the senior's handset leg before disconnecting the scammer.
+  - `backend/scripts/replay_transcript.py`: Offline test harness replaying 6 realistic fixture transcripts against live Gemini 3.5 Flash Lite.
+  - `backend/fixtures/*.json`: 6 realistic fixtures (`grandchild_in_jail`, `irs_warrant`, `bank_fraud`, `doctor_appointment`, `family_chat`, `false_positive_bait`).
+* **Implementation Details:**
+  1. **Rolling Memory Buffer & Hybrid Triggers:**
+     - Rolling 60s window of utterances.
+     - Fast keyword path: Word-boundary regex matching scam indicators. Evaluates immediately if $\ge 15$ words.
+     - Heartbeat path: Periodic check every 20s if new words arrived since the previous cycle.
+     - In-progress gate: Audio is only analyzed while `calls.status == 'in_progress'`.
+  2. **Shared Community Reputation Context:**
+     - Aggregates caller `threat_count` across the TROT network and injects warning context into Gemini's prompt if the number has a history of fraud.
+  3. **Gemini Autonomous Tool Calling:**
+     - Declared defense tools: `notify_guardian`, `warn_senior`, `end_call`, `block_number`.
+     - Model autonomously chooses proportionate defense actions.
+  4. **Spoken Senior Protection & Autonomous Disconnect:**
+     - Twilio tracks the senior's handset leg (`child_call_sid`) via `/voice/dial-status`.
+     - On scam detection, TROT plays a calm, spoken safety warning (`<Say voice="Polly.Joanna-Neural">`) directly to the senior's phone informing them of the scam interception and advising them to call their guardian, while simultaneously severing the scammer's connection.
+  5. **Risk-Aware Call Summaries:**
+     - Upon call completion, Gemini generates a plain-language summary formatted specifically for family caregivers, detailing the scammer's claims if intercepted.
+* **Verification:**
+  - **Replay Test Harness:** All 6 fixtures passed: 0 alerts on benign calls, exactly 1 alert + autonomous termination on scam calls.
+  - **Live Phone Test:** Live call simulating the "grandchild in jail" scam was successfully detected in real time by Gemini 3.5 Flash Lite, alert created in Supabase, and call hung up by TROT.
 
 ---
 

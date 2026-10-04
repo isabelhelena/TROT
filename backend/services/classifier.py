@@ -121,7 +121,7 @@ AGENTIC_DEFENSE_TOOL = types.Tool(
 
 SYSTEM_PROMPT = """You are TROT Autonomous Voice Guardian, an AI defense agent protecting vulnerable seniors from live telephone scams in real time.
 
-You are evaluating the recent rolling audio transcript of the CALLER from an ongoing phone call.
+You are evaluating the audio transcript of the CALLER from an ongoing phone call.
 
 RULES:
 1. Normal / Benign calls (family conversations, doctor/clinic appointments, deliveries, or benign uses of words like 'shed permit warrant', 'birthday gift card'):
@@ -132,19 +132,26 @@ RULES:
    - You MUST invoke proportionate defense tools:
      - notify_guardian: ALWAYS invoke this with scam_type, severity ('medium' or 'high'), confidence (0.0 to 1.0), and a concise reason.
      - warn_senior: Invoke this with a calm warning if the senior is being actively deceived or frightened.
-     - end_call: Invoke this IMMEDIATELY if high confidence (>0.80) or severe imminent extortion (arrest, wire transfer, gift cards).
+     - end_call: Invoke this IMMEDIATELY if high confidence (>=0.80) or severe imminent extortion (arrest, wire transfer, gift cards, cash withdrawal, demanding money now).
      - block_number: Invoke this to flag the number for the shared network.
 
-3. Be decisive and precise. Distinguish true scams from innocent conversational context."""
+3. Re-Evaluations of Ongoing Suspect Calls:
+   - If this call was ALREADY flagged in prior evaluations (see ACTIVE THREAT MONITORING in prompt context), and the caller continues demanding money, pressing for action, repeating false emergencies, or maintaining fraudulent impersonation:
+   - YOU MUST IMMEDIATELY INVOKE end_call to sever the call and protect the senior!
+   - You may also invoke notify_guardian with updated, escalated confidence and details.
+
+4. Be decisive and precise. Distinguish true scams from innocent conversational context."""
 
 
 def classify_call_transcript(
     transcript_window: str,
     from_number: str,
     network_threat_count: int = 0,
+    prior_threat_state: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Evaluates rolling transcript text with Gemini 3.5 Flash Lite.
+    Supports state continuity across re-evaluations.
     Returns a list of invoked tool calls (e.g. notify_guardian, end_call).
     """
     client = get_genai_client()
@@ -155,15 +162,27 @@ def classify_call_transcript(
     # Build prompt context, injecting network reputation if known
     context_prefix = ""
     if network_threat_count > 0:
-        context_prefix = (
+        context_prefix += (
             f"[COMMUNITY REPUTATION WARNING: Caller {from_number} has been flagged "
             f"{network_threat_count} time(s) across the TROT network for previous scams!]\n\n"
+        )
+
+    # State Continuity: Inject prior threat evaluation if re-evaluating
+    if prior_threat_state:
+        prev_type = prior_threat_state.get("scam_type", "scam")
+        prev_conf = int(float(prior_threat_state.get("confidence", 0.8)) * 100)
+        prev_reason = prior_threat_state.get("reason", "")
+        context_prefix += (
+            f"[ACTIVE THREAT MONITORING: This call was previously flagged as a potential {prev_type} "
+            f"({prev_conf}% confidence). Prior reason: \"{prev_reason}\".\n"
+            f"If the caller continues demanding money/cards, maintaining fake authority, or isolating the senior, "
+            f"you MUST invoke end_call immediately!]\n\n"
         )
 
     user_content = (
         f"{context_prefix}"
         f"Caller Number: {from_number}\n"
-        f"Recent Caller Audio Transcript (last ~60 seconds):\n\"\"\"\n{transcript_window}\n\"\"\"\n\n"
+        f"Recent Caller Audio Transcript:\n\"\"\"\n{transcript_window}\n\"\"\"\n\n"
         f"Evaluate the conversation and invoke any necessary defense tools."
     )
 

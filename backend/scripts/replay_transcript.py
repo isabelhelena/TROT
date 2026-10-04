@@ -42,12 +42,17 @@ async def replay_fixture(
     guardian_id = "22222222-2222-2222-2222-222222222222"
 
     recorded_alerts: List[Dict[str, Any]] = []
+    updated_alerts: List[Dict[str, Any]] = []
     terminated_calls: List[str] = []
 
     def fake_record_alert(**kwargs):
         recorded_alerts.append(kwargs)
         # Returns True on first alert, False on subsequent duplicates
         return len(recorded_alerts) == 1
+
+    def fake_update_alert(**kwargs):
+        updated_alerts.append(kwargs)
+        return True
 
     def fake_end_call(sid, reason="Scam detected", **kwargs):
         terminated_calls.append(sid)
@@ -76,7 +81,7 @@ async def replay_fixture(
     if not has_api_key:
         print(f"  [INFO] GEMINI_API_KEY not set in .env -> Using mock Gemini tool calling for offline verification.")
 
-    def mock_classify(transcript_window, from_number, network_threat_count=0):
+    def mock_classify(transcript_window, from_number, network_threat_count=0, prior_threat_state=None):
         if expected_alert:
             scam_type = fixture.get("expected_scam_type", "other_fraud")
             return [
@@ -105,9 +110,11 @@ async def replay_fixture(
     # Patch alerts and Twilio actions to capture outcomes
     with (
         patch("backend.services.detector.record_scam_alert", side_effect=fake_record_alert),
+        patch("backend.services.detector.update_scam_alert", side_effect=fake_update_alert),
         patch("backend.services.detector.end_active_call", side_effect=fake_end_call),
         patch("backend.services.detector.get_network_threat_count", return_value=0),
         patch("backend.services.detector.get_caller_number_record", return_value=None),
+        patch("backend.services.detector.MIN_COOLDOWN_SECONDS", 0.0),
         classify_patch,
     ):
         start_detector(

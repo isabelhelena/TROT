@@ -200,6 +200,36 @@ def insert_alert(
     return None
 
 
+def update_alert(
+    call_sid: str,
+    confidence: float,
+    summary: str,
+    severity: Optional[str] = None,
+    scam_type: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Updates an existing alert row with newly escalated confidence and summary."""
+    client = get_supabase_client()
+    update_data: Dict[str, Any] = {
+        "confidence": round(float(confidence), 2),
+        "summary": summary,
+    }
+    if severity:
+        update_data["severity"] = severity
+    if scam_type:
+        update_data["scam_type"] = scam_type
+    try:
+        res = (
+            client.table("alerts")
+            .update(update_data)
+            .eq("call_sid", call_sid)
+            .execute()
+        )
+        return res.data[0] if res.data else None
+    except Exception as e:
+        logger.error(f"Failed to update alert for {call_sid}: {e}")
+        return None
+
+
 def update_call_risk(call_sid: str, risk: str) -> Optional[Dict[str, Any]]:
     """Updates the risk level of a call ('none', 'suspicious', 'scam')."""
     client = get_supabase_client()

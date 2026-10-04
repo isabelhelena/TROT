@@ -207,11 +207,13 @@ sequenceDiagram
   - `backend/scripts/replay_transcript.py`: Offline test harness replaying 6 realistic fixture transcripts against live Gemini 3.5 Flash Lite.
   - `backend/fixtures/*.json`: 6 realistic fixtures (`grandchild_in_jail`, `irs_warrant`, `bank_fraud`, `doctor_appointment`, `family_chat`, `false_positive_bait`).
 * **Implementation Details:**
-  1. **Rolling Memory Buffer & Hybrid Triggers:**
-     - Rolling 60s window of utterances.
-     - Fast keyword path: Word-boundary regex matching scam indicators. Evaluates immediately if $\ge 15$ words.
+  1. **Rolling Memory Buffer & Continuous Re-Evaluation:**
+     - Rolling 60s window of utterances with an 8-second debounce cooldown.
+     - Fast keyword path: Word-boundary regex matching scam indicators. Evaluates immediately if $\ge 15$ words and cooldown has elapsed.
      - Heartbeat path: Periodic check every 20s if new words arrived since the previous cycle.
      - In-progress gate: Audio is only analyzed while `calls.status == 'in_progress'`.
+     - **Continuous Re-Evaluation & State Continuity:** The detector does NOT freeze after an initial alert. It passes previous threat state (`[ACTIVE THREAT MONITORING: ... Flagged as potential scam (X% confidence)]`) into subsequent Gemini prompts, solving rolling-window amnesia. If the scammer continues pressing demands, Gemini immediately escalates and invokes `end_call`.
+     - **In-Place Alert Updates & Ratcheting:** On re-evaluation, the existing alert row in Supabase is updated in-place (`update_alert`) with escalated confidence and refined summary, preventing duplicate alert spam or multiple guardian phone buzzes while keeping the dashboard live.
   2. **Shared Community Reputation Context:**
      - Aggregates caller `threat_count` across the TROT network and injects warning context into Gemini's prompt if the number has a history of fraud.
   3. **Gemini Autonomous Tool Calling:**
@@ -223,7 +225,7 @@ sequenceDiagram
   5. **Risk-Aware Call Summaries:**
      - Upon call completion, Gemini generates a plain-language summary formatted specifically for family caregivers, detailing the scammer's claims if intercepted.
 * **Verification:**
-  - **Replay Test Harness:** All 6 fixtures passed: 0 alerts on benign calls, exactly 1 alert + autonomous termination on scam calls.
+  - **Replay Test Harness:** All 6 fixtures passed: 0 alerts on benign calls, exactly 1 alert + autonomous termination on scam calls. Re-evaluations verified with state continuity.
   - **Live Phone Test:** Live call simulating the "grandchild in jail" scam was successfully detected in real time by Gemini 3.5 Flash Lite, alert created in Supabase, and call hung up by TROT.
 
 ---

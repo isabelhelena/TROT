@@ -11,6 +11,7 @@ from backend.db import (
 from backend.services.classifier import classify_call_transcript
 from backend.services.alerts import (
     record_scam_alert,
+    update_scam_alert,
     end_active_call,
     play_warning_to_senior,
 )
@@ -42,6 +43,7 @@ KEYWORD_PATTERN = re.compile(
 WINDOW_SECONDS = 60.0
 HEARTBEAT_INTERVAL_SECONDS = 20.0
 MIN_WORDS_FOR_KEYWORD_TRIGGER = 15
+MIN_COOLDOWN_SECONDS = 8.0
 
 
 class CallBuffer:
@@ -62,6 +64,9 @@ class CallBuffer:
         self.utterances: List[Tuple[float, str]] = []  # (timestamp, text)
         self.last_analyzed_index: int = 0
         self.alert_fired: bool = False
+        self.active_scam_state: Optional[Dict[str, Any]] = None
+        self.terminated: bool = False
+        self.last_eval_time: float = 0.0
         self.is_active: bool = True
         self.lock = asyncio.Lock()
         self.heartbeat_task: Optional[asyncio.Task] = None
@@ -133,6 +138,7 @@ async def stop_detector(call_sid: str) -> None:
     buf = _active_buffers.pop(call_sid, None)
     if buf:
         buf.is_active = False
+        buf.terminated = True
         if buf.heartbeat_task and not buf.heartbeat_task.done():
             buf.heartbeat_task.cancel()
         logger.info(f"[DETECTOR_STOPPED] CallSid={call_sid}")
@@ -144,18 +150,21 @@ async def ingest_transcript(call_sid: str, text: str) -> None:
     Appends to buffer and tests keyword trigger.
     """
     buf = _active_buffers.get(call_sid)
-    if not buf or not buf.is_active:
+    if not buf or not buf.is_active or buf.terminated:
         return
 
     buf.append(text)
 
-    # If an alert already fired for this call, skip further triggers
-    if buf.alert_fired:
-        return
-
     # Trigger 1: Keyword Path (Immediate regex check)
     match = KEYWORD_PATTERN.search(text)
     if match:
+        now = time.time()
+        if now - buf.last_eval_time < MIN_COOLDOWN_SECONDS:
+            logger.info(
+                f"[KEYWORD_COOLDOWN] CallSid={call_sid} Cooldown active ({now - buf.last_eval_time:.1f}s < {MIN_COOLDOWN_SECONDS}s)"
+            )
+            return
+
         word_count = buf.get_word_count()
         logger.info(
             f"[KEYWORD_HIT] CallSid={call_sid} Matched='{match.group(0)}' (WindowWords={word_count})"
@@ -171,12 +180,16 @@ async def ingest_transcript(call_sid: str, text: str) -> None:
 async def _heartbeat_loop(buf: CallBuffer) -> None:
     """Trigger 2: Heartbeat Path (checks every 20s if new text arrived)."""
     try:
-        while buf.is_active:
+        while buf.is_active and not buf.terminated:
             await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
-            if not buf.is_active or buf.alert_fired:
+            if not buf.is_active or buf.terminated:
                 break
 
             if buf.has_new_text_since_last_analysis():
+                now = time.time()
+                if now - buf.last_eval_time < MIN_COOLDOWN_SECONDS:
+                    continue
+
                 logger.info(
                     f"[HEARTBEAT_TRIGGER] CallSid={buf.call_sid} New utterances detected"
                 )
@@ -193,13 +206,14 @@ async def _heartbeat_loop(buf: CallBuffer) -> None:
 async def _run_detection_cycle(buf: CallBuffer, trigger: str) -> None:
     """
     Executes a Gemini evaluation cycle under a concurrency lock.
-    Enforces in-progress gating, trusted-number checks, and autonomous tool calling.
+    Supports continuous re-evaluation, state continuity, in-progress gating,
+    trusted-number checks, and autonomous tool calling.
     """
-    if buf.alert_fired or not buf.is_active:
+    if buf.terminated or not buf.is_active:
         return
 
     async with buf.lock:
-        if buf.alert_fired or not buf.is_active:
+        if buf.terminated or not buf.is_active:
             return
 
         from backend.main import get_active_call_status
@@ -228,17 +242,20 @@ async def _run_detection_cycle(buf: CallBuffer, trigger: str) -> None:
             return
 
         buf.mark_analyzed()
+        buf.last_eval_time = time.time()
 
         logger.info(
-            f"[RUNNING_GEMINI] CallSid={buf.call_sid} Trigger={trigger} Words={len(transcript_window.split())}"
+            f"[RUNNING_GEMINI] CallSid={buf.call_sid} Trigger={trigger} Words={len(transcript_window.split())} "
+            f"HasPriorThreat={bool(buf.active_scam_state)}"
         )
 
-        # 4. Invoke Gemini 3.5 Flash Lite
+        # 4. Invoke Gemini 3.5 Flash Lite with state continuity
         tool_calls = await asyncio.to_thread(
             classify_call_transcript,
             transcript_window=transcript_window,
             from_number=buf.from_number,
             network_threat_count=threat_count,
+            prior_threat_state=buf.active_scam_state,
         )
 
         # 5. Execute Autonomous Defense Tools
@@ -256,26 +273,56 @@ async def _run_detection_cycle(buf: CallBuffer, trigger: str) -> None:
                     confidence = float(args.get("confidence", 0.9))
                     reason = args.get("reason", "Potential fraud detected.")
 
-                    created = record_scam_alert(
-                        call_sid=buf.call_sid,
-                        senior_id=buf.senior_id,
-                        guardian_id=buf.guardian_id,
-                        contact_number=buf.from_number,
-                        scam_type=scam_type,
-                        severity=severity,
-                        confidence=confidence,
-                        trigger=trigger,
-                        summary=reason,
-                    )
-                    if created:
-                        buf.alert_fired = True
+                    if not buf.alert_fired:
+                        created = record_scam_alert(
+                            call_sid=buf.call_sid,
+                            senior_id=buf.senior_id,
+                            guardian_id=buf.guardian_id,
+                            contact_number=buf.from_number,
+                            scam_type=scam_type,
+                            severity=severity,
+                            confidence=confidence,
+                            trigger=trigger,
+                            summary=reason,
+                        )
+                        if created:
+                            buf.alert_fired = True
+                            buf.active_scam_state = {
+                                "scam_type": scam_type,
+                                "severity": severity,
+                                "confidence": confidence,
+                                "reason": reason,
+                            }
+                    else:
+                        # Re-evaluation of ongoing call: update alert in-place
+                        prev_conf = (
+                            buf.active_scam_state.get("confidence", 0.0)
+                            if buf.active_scam_state
+                            else 0.0
+                        )
+                        new_conf = max(confidence, prev_conf)
+                        update_scam_alert(
+                            call_sid=buf.call_sid,
+                            scam_type=scam_type,
+                            severity=severity,
+                            confidence=new_conf,
+                            summary=reason,
+                        )
+                        buf.active_scam_state = {
+                            "scam_type": scam_type,
+                            "severity": severity,
+                            "confidence": new_conf,
+                            "reason": reason,
+                        }
 
                 elif name == "warn_senior":
                     warn_senior_msg = args.get("message")
                     play_warning_to_senior(buf.call_sid, warn_senior_msg)
 
                 elif name == "end_call":
-                    end_call_reason = args.get("reason", "Autonomous termination of scammer")
+                    end_call_reason = args.get(
+                        "reason", "Autonomous termination of scammer"
+                    )
 
                 elif name == "block_number":
                     logger.info(
@@ -297,3 +344,7 @@ async def _run_detection_cycle(buf: CallBuffer, trigger: str) -> None:
                     spoken_warning=spoken,
                     child_call_sid=child_sid,
                 )
+                buf.terminated = True
+                buf.is_active = False
+                if buf.heartbeat_task and not buf.heartbeat_task.done():
+                    buf.heartbeat_task.cancel()

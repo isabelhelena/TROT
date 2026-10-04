@@ -6,6 +6,7 @@ from twilio.rest import Client as TwilioClient
 
 from backend.db import (
     insert_alert,
+    update_alert,
     update_call_risk,
     increment_number_threat,
 )
@@ -75,6 +76,34 @@ def record_scam_alert(
         f"Risk={risk_level} Summary=\"{summary}\""
     )
     return True
+
+
+def update_scam_alert(
+    call_sid: str,
+    scam_type: str,
+    severity: str,
+    confidence: float,
+    summary: str,
+) -> bool:
+    """
+    Updates an existing scam alert with escalated confidence, summary, and severity.
+    Ratchets call risk upward if severity is high.
+    """
+    logger.info(
+        f"[ALERT_RE_EVALUATED] CallSid={call_sid} ScamType={scam_type} "
+        f"Severity={severity} Confidence={confidence:.2f}"
+    )
+    if severity == "high":
+        update_call_risk(call_sid, "scam")
+
+    updated = update_alert(
+        call_sid=call_sid,
+        confidence=confidence,
+        summary=summary,
+        severity=severity,
+        scam_type=scam_type,
+    )
+    return bool(updated)
 
 
 def end_active_call(

@@ -1,0 +1,15 @@
+{
+  "name": "irs_warrant",
+  "type": "scam",
+  "expected_alert": true,
+  "expected_scam_type": "irs_warrant",
+  "from_number": "+18005550199",
+  "lines": [
+    "This is Officer Jack Miller calling from the Internal Revenue Service fraud division.",
+    "This call is being recorded. There is an active federal arrest warrant issued under your social security number.",
+    "You have unpaid delinquent federal taxes totaling four thousand dollars.",
+    "Sheriff deputies are currently on their way to your residence to take you into federal custody.",
+    "The only way to cancel this arrest warrant is to go to Target or Walmart right now.",
+    "You must purchase prepaid Apple gift cards to settle the federal bond immediately."
+  ]
+}

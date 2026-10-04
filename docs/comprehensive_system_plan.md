@@ -163,136 +163,75 @@ sequenceDiagram
 ---
 
 ### Phase 1: Call Lifecycle & Audio to Live Transcript
-**Status:** Sub-Phases 1A & 1B Complete; Sub-Phase 1C Next 🔜
+**Status:** COMPLETE ✅ (Verified on live phones & test suites)
 
 #### Sub-Phase 1A: Telephony State Machine & Callbacks (COMPLETE ✅)
-* **Commit:** `12c108c`
+* **Commits:** `12c108c`, hardened in `2e6a22a`
 * **Files Modified:** `backend/main.py`, `backend/db.py`, `backend/scripts/test_voice.py`
 * **Implementation:**
   - TwiML `<Dial>` configured with `timeout="15"` and `action="/voice/dial-complete"`.
   - Nested `<Number statusCallback="/voice/dial-status" statusCallbackEvent="answered completed">`.
-  - `POST /voice/dial-status`: On `CallStatus in ('in-progress', 'answered')`, updates `calls.status = 'in_progress'` in memory and DB.
-  - `POST /voice/dial-complete`: Normalizes `DialCallStatus`:
-    - `'no-answer'` / `'canceled'` $\rightarrow$ `'no_answer'`
-    - `'completed'` / `'answered'` $\rightarrow$ `'completed'`
-    - `'busy'` / `'failed'` $\rightarrow$ `'busy'` / `'failed'`
-    - Updates `calls.status` and sets `ended_at = now()`.
-  - In-memory cache `call_states` with DB fallback for low-latency call status tracking.
-* **Verification:** Verified via automated unit tests in `test_voice.py` covering timeout, callbacks, and status transitions.
+  - `POST /voice/dial-status`: On `CallStatus in ('in-progress', 'answered')`, updates `calls.status = 'in_progress'` in memory and DB. Immediate fallback: on `CallStatus in ('no-answer', 'busy', 'failed', 'canceled')`, immediately marks `calls.status = 'no_answer'` without waiting for `dial-complete`.
+  - `POST /voice/dial-complete`: Normalizes `DialCallStatus` and returns `<Response><Hangup/></Response>`.
+* **Verification:** Verified via automated unit tests in `test_voice.py` and live calls.
 
 #### Sub-Phase 1B: Twilio Audio Media Stream Ingress (COMPLETE ✅)
 * **Commit:** `17055c7`
 * **Files Modified:** `backend/main.py`, `backend/scripts/test_voice.py`
 * **Implementation:**
   - Added `<Start><Stream url="wss://HOST/ws/audio" />` **strictly before** `<Dial>`.
-  - Enforced inbound-only track to stream caller audio exclusively.
-  - Implemented `WS /ws/audio`:
-    - Handshakes `connected`.
-    - Handles `start`: extracts `callSid` and `streamSid`.
-    - Handles `media`: extracts base64 payload, decodes raw mulaw 8000Hz bytes, tracks packet statistics.
-    - Handles `stop` and `WebSocketDisconnect` cleanly.
-* **Verification:** Verified via `test_voice.py` simulating Twilio WebSocket frames; all 6 test cases passed.
+  - Inbound-only track streams caller audio exclusively.
+  - Implemented `WS /ws/audio` with Twilio protocol decoder (`connected`, `start`, `media`, `stop`).
+* **Verification:** Verified via `test_voice.py` and live streaming calls.
 
-#### Sub-Phase 1C: Deepgram Nova-2 Streaming STT & Database Writes (NEXT UP 🔜)
-* **Objective:** Forward raw audio chunks to Deepgram Nova-2 over a live WebSocket stream and store final transcripts in Supabase.
-* **Files to Create / Modify:**
-  - `backend/services/transcribe.py` [NEW]: Deepgram streaming manager.
-  - `backend/main.py` [MODIFY]: Integrate Deepgram session into `WS /ws/audio`.
-  - `backend/db.py` [MODIFY]: Add `insert_transcript(call_sid, text)` helper.
-  - `backend/scripts/test_voice.py` [MODIFY]: Add offline mock test for transcription pipeline.
-* **Detailed Engineering Specs:**
-  1. **Deepgram Client Configuration:**
-     - SDK: `deepgram-sdk` (v3+).
-     - Streaming parameters:
-       ```python
-       options = LiveOptions(
-           model="nova-2",
-           language="en",
-           encoding="mulaw",
-           sample_rate=8000,
-           punctuate=True,
-           interim_results=False, # We only process confirmed speech
-           endpointing=300,        # 300ms pause finalizes utterance
-       )
-       ```
-  2. **Event Handling & Gating:**
-     - On Deepgram message event:
-       - Check `is_final == True` and transcript text is not empty.
-       - **In-Progress Gate:** Verify `get_active_call_status(call_sid) == "in_progress"`. If call is still ringing, ignore to avoid transcribing ringback tones or voicemail greetings.
-     - On valid utterance:
-       - Log: `[TRANSCRIPT] CallSid={call_sid}: "{text}"`
-       - Insert into `call_transcripts` table (`call_sid`, `senior_id`, `guardian_id`, `text`).
-       - Append text to the in-memory rolling buffer for that call.
-  3. **Lifecycle Management:**
-     - Connection opened on Twilio `start` event.
-     - Audio chunks piped directly on Twilio `media` event: `deepgram_connection.send(raw_audio)`.
-     - Connection cleanly closed on Twilio `stop` event or socket disconnect.
-* **Checkpoint Criteria:** Dial the Twilio number, answer on the senior's phone, and speak. Transcribed words appear in the terminal and in Supabase `call_transcripts` table in real time.
+#### Sub-Phase 1C: Deepgram Nova-2 Streaming STT & Database Writes (COMPLETE ✅)
+* **Commit:** `de1fe00`
+* **Files Created / Modified:** `backend/services/transcribe.py`, `backend/main.py`, `backend/db.py`, `backend/requirements.txt`
+* **Implementation:**
+  - Integrated `deepgram-sdk>=3.0.0` (`AsyncDeepgramClient`) streaming `nova-2` mulaw 8000Hz.
+  - In-progress gating: `get_active_call_status(call_sid) == "in_progress"`. Only speech uttered after the senior answers is recorded; ringback tones and carrier voicemails are filtered.
+  - Persists each `is_final` utterance to Supabase `call_transcripts` table in real time.
+* **Verification:** Verified via live phone call test; transcripts verified in Supabase Table Editor and console logs.
 
 ---
 
 ### Phase 2: Autonomous Detection Engine & Agentic Defense
-**Status:** PLANNED
+**Status:** COMPLETE ✅ (Verified on test harness & live phone call)
 
-* **Objective:** Autonomous real-time threat detection using a rolling memory buffer, hybrid triggers (regex keywords + 20s heartbeat), network-wide reputation context, and autonomous Gemini function calling.
-* **Files to Create / Modify:**
-  - `backend/services/detector.py` [NEW]: Rolling buffer manager, regex keyword matcher, 20s heartbeat asyncio task.
-  - `backend/services/classifier.py` [NEW]: Gemini agent with function declarations and tool execution logic.
-  - `backend/services/alerts.py` [NEW]: Alert deduplication insert, threat count increment, risk status update.
-  - `backend/scripts/replay_transcript.py` [NEW]: Offline test harness to replay scripted transcripts with realistic timing.
-  - `backend/fixtures/*.json` [NEW]: Fixture transcripts (3 scam scripts, 2 benign scripts).
-* **Detailed Engineering Specs:**
-
-#### 1. Rolling Memory Buffer & Triggers (`services/detector.py`)
-* Maintain a per-call in-memory buffer:
-  ```python
-  class CallBuffer:
-      call_sid: str
-      utterances: List[Tuple[float, str]] # (timestamp, text)
-      word_count: int
-      last_analyzed_time: float
-      alert_fired: bool
-  ```
-* Retention window: Keep utterances from the last 60 seconds.
-* **Trigger 1: Keyword Path (Immediate):**
-  - Word-boundary regex matching high-risk patterns:
-    `\b(gift\s+card|warrant|wire\s+transfer|bitcoin|crypto|arrest|social\s+security|don't\s+tell\s+anyone|irs|internal\s+revenue|federal\s+agent|jail|bail|target\s+card|apple\s+card)\b` (case-insensitive).
-  - Triggers Gemini immediately if there is a match AND buffer has at least 15 words.
-* **Trigger 2: Heartbeat Path (Periodic):**
-  - Runs every 20 seconds as an `asyncio.create_task`.
-  - Runs Gemini only if new transcript text has arrived since the last check.
-* **Gating:** Skip analysis if `call.status != 'in_progress'` or caller's `numbers.status == 'trusted'`.
-
-#### 2. Shared Community Reputation Context
-* Before querying Gemini, query the network-wide reputation of the caller:
-  ```python
-  total_threats = query_network_threat_count(from_number)
-  ```
-* If `total_threats > 0`, prepend to Gemini context:
-  `"[SYSTEM NOTE: Caller number {from_number} has been flagged {total_threats} times across the TROT network for prior fraud attempts.]"`
-
-#### 3. Gemini Autonomous Tool Calling (`services/classifier.py`)
-* Model: `gemini-2.5-flash` via `google-genai` SDK.
-* Declared Tools:
-  - `notify_guardian(scam_type: str, severity: str, confidence: float, reason: str)`
-  - `warn_senior(message: str)`
-  - `end_call(reason: str)`
-  - `block_number(reason: str)`
-* System Prompt:
-  > *"You are TROT Autonomous Call Guardian. You protect vulnerable seniors from phone fraud in real time. Analyze the rolling transcript of the caller. If the caller is manipulating, threatening, or requesting money/cards, invoke the appropriate defense tools. For high-confidence imminent harm, invoke end_call immediately. Never invent tools."*
-* Tool Execution:
-  - `notify_guardian`: Calls `create_alert(...)` in `alerts.py`.
-  - `end_call`: Calls `twilio_client.calls(call_sid).update(status="completed")`.
-  - `warn_senior`: Calls Twilio API to update senior's leg with `<Say voice="Polly.Joanna-Neural">{message}</Say><Hangup/>`.
-  - `block_number`: Updates caller row in `numbers` table to `status='suspicious'`.
-* **Alert Deduplication:** Alert insert uses `INSERT INTO alerts ... ON CONFLICT (call_sid) DO NOTHING`. Side effects run only if a new row was inserted.
-* **Post-Call Summary:** On `dial-complete`, if call was `in_progress`, prompt Gemini for a 1-sentence plain-language summary and write to `calls.summary`.
-
-* **Checkpoint Criteria:** Running `replay_transcript.py` against scam fixtures triggers autonomous tool calls and exactly 1 alert row; benign fixtures trigger 0 tool calls.
+* **Objective:** Autonomous real-time threat detection using a rolling memory buffer, hybrid triggers (regex keywords + 20s heartbeat), network-wide reputation context, autonomous Gemini function calling, and spoken senior safety warning.
+* **Model:** `gemini-3.5-flash-lite` via official `google-genai` SDK (`gemini-3.5-flash-lite`).
+* **Files Created & Enhanced:**
+  - `backend/services/detector.py`: Rolling buffer manager (last 60s), regex keyword matcher, 20s heartbeat asyncio task, debounce lock, child leg tracking.
+  - `backend/services/classifier.py`: Gemini agent using `google-genai` SDK with declared function tools (`notify_guardian`, `warn_senior`, `end_call`, `block_number`) and risk-aware call summarizer.
+  - `backend/services/alerts.py`: Alert deduplication insert (`ON CONFLICT (call_sid) DO NOTHING`), threat count increment, call risk update, and autonomous kill switch (`end_active_call`) with Amazon Polly TTS spoken safety message played to the senior's handset leg before disconnecting the scammer.
+  - `backend/scripts/replay_transcript.py`: Offline test harness replaying 6 realistic fixture transcripts against live Gemini 3.5 Flash Lite.
+  - `backend/fixtures/*.json`: 6 realistic fixtures (`grandchild_in_jail`, `irs_warrant`, `bank_fraud`, `doctor_appointment`, `family_chat`, `false_positive_bait`).
+* **Implementation Details:**
+  1. **Rolling Memory Buffer & Continuous Re-Evaluation:**
+     - Rolling 60s window of utterances with an 8-second debounce cooldown.
+     - Fast keyword path: Word-boundary regex matching scam indicators. Evaluates immediately if $\ge 15$ words and cooldown has elapsed.
+     - Heartbeat path: Periodic check every 20s if new words arrived since the previous cycle.
+     - In-progress gate: Audio is only analyzed while `calls.status == 'in_progress'`.
+     - **Continuous Re-Evaluation & State Continuity:** The detector does NOT freeze after an initial alert. It passes previous threat state (`[ACTIVE THREAT MONITORING: ... Flagged as potential scam (X% confidence)]`) into subsequent Gemini prompts, solving rolling-window amnesia. If the scammer continues pressing demands, Gemini immediately escalates and invokes `end_call`.
+     - **In-Place Alert Updates & Ratcheting:** On re-evaluation, the existing alert row in Supabase is updated in-place (`update_alert`) with escalated confidence and refined summary, preventing duplicate alert spam or multiple guardian phone buzzes while keeping the dashboard live.
+  2. **Shared Community Reputation Context:**
+     - Aggregates caller `threat_count` across the TROT network and injects warning context into Gemini's prompt if the number has a history of fraud.
+  3. **Gemini Autonomous Tool Calling:**
+     - Declared defense tools: `notify_guardian`, `warn_senior`, `end_call`, `block_number`.
+     - Model autonomously chooses proportionate defense actions.
+  4. **Spoken Senior Protection & Autonomous Disconnect:**
+     - Twilio tracks the senior's handset leg (`child_call_sid`) via `/voice/dial-status`.
+     - On scam detection, TROT plays a calm, spoken safety warning (`<Say voice="Polly.Joanna-Neural">`) directly to the senior's phone informing them of the scam interception and advising them to call their guardian, while simultaneously severing the scammer's connection.
+  5. **Risk-Aware Call Summaries:**
+     - Upon call completion, Gemini generates a plain-language summary formatted specifically for family caregivers, detailing the scammer's claims if intercepted.
+* **Verification:**
+  - **Replay Test Harness:** All 6 fixtures passed: 0 alerts on benign calls, exactly 1 alert + autonomous termination on scam calls. Re-evaluations verified with state continuity.
+  - **Live Phone Test:** Live call simulating the "grandchild in jail" scam was successfully detected in real time by Gemini 3.5 Flash Lite, alert created in Supabase, and call hung up by TROT.
 
 ---
 
 ### Phase 3: Auth, Pairing, & Real-Time Dashboards
+**Status:** IN PROGRESS (Frontend draft merged from teammate in PR #3 / commit `41eba0b`)
 **Status:** PLANNED (Frontend guide already prepared in `docs/phase_3_frontend_guide.md`)
 
 * **Objective:** Full user onboarding, single-use pairing flow, calm senior status screen, and rich guardian monitoring dashboard with remote kill switch.
@@ -365,7 +304,7 @@ sequenceDiagram
 | **Audio Transport** | Twilio Media Streams (`WS /ws/audio`, mulaw 8kHz) | Console chunk logs + unit tests |
 | **Speech-to-Text** | Deepgram Nova-2 streaming WebSocket | Words logged to console + Supabase |
 | **Threat Detection** | Regex keywords (fast) + 20s heartbeat (steady) | `replay_transcript.py` harness |
-| **Autonomous Actions** | Gemini 2.5 Flash Function Calling | Automated tool execution (`end_call`, etc.) |
+| **Autonomous Actions** | Gemini 3.5 Flash Lite Function Calling | Automated tool execution (`end_call`, etc.) |
 | **Community Reputation**| Global `threat_count` aggregation across `numbers` | Prompt context injection |
 | **Data & Realtime** | Supabase Postgres + RLS + Realtime publication | Realtime dashboard updates |
 | **Frontend UI** | Next.js App Router + Tailwind CSS | Browser + Incognito multi-role test |

@@ -1,0 +1,13 @@
+{
+  "name": "family_chat",
+  "type": "benign",
+  "expected_alert": false,
+  "from_number": "+12105559876",
+  "lines": [
+    "Hey Grandma! Just calling to see how you are doing today.",
+    "Mom told me you were working out in the garden this morning.",
+    "The kids loved the cookies you baked for them last weekend.",
+    "Are you still good to come over for Sunday dinner around five?",
+    "Awesome, we will pick you up on our way back from church. Love you!"
+  ]
+}

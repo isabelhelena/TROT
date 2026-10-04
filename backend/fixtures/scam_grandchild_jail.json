@@ -1,0 +1,15 @@
+{
+  "name": "grandchild_in_jail",
+  "type": "scam",
+  "expected_alert": true,
+  "expected_scam_type": "grandchild_in_jail",
+  "from_number": "+15559876543",
+  "lines": [
+    "Hello? Grandma? Can you hear me?",
+    "It's me, Kevin. Grandma, please don't be mad, I'm in really big trouble.",
+    "I was in an accident in Mexico and the police arrested me.",
+    "I am in jail right now and the lawyer said I need bail money right away.",
+    "You have to send five thousand dollars through a wire transfer immediately.",
+    "Please don't tell mom and dad, they will kill me. Just send the money so I can get out of this jail cell."
+  ]
+}

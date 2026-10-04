@@ -2,7 +2,7 @@
 
 Threat Reduction and Oversight Technology — RowdyHacks 2026.
 
-Phase 3 provides email/password login for existing pre-linked accounts, a guardian
+Phase 3 provides email/password login for existing accounts, guardian-managed pairing, a guardian
 call dashboard, a senior status screen, and scripts for a simulated call demo.
 The existing Python voice bridge is preserved. This phase does not add audio
 streaming, transcription providers, Gemini, recording, or number provisioning.
@@ -29,14 +29,37 @@ Restart Next.js after changing environment variables.
 Open `http://localhost:3000/login`. Use your two existing confirmed Supabase Auth
 users with email/password sign-in enabled and passwords set. Their `profiles.id`
 values must match their Auth user IDs. The profile role determines the dashboard;
-there is no signup, role picker, or pairing UI in this demo.
+there is no signup or role picker in this demo.
 
-The senior must already have `guardian_id`, `phone`, `twilio_number`, and
-`consented_at` set. Set the guardian's `profiles.phone` to an E.164 number for the
+The senior must already have `phone`, `twilio_number`, and `consented_at` set.
+The guardian can connect the account from the dashboard using the senior’s email. Set the guardian's `profiles.phone` to an E.164 number for the
 senior's “Call Guardian” button. These are manual setup steps, not frontend edits.
 
 Use a normal browser window for the guardian and an incognito window for the
 senior, so their sessions remain separate.
+
+## Guardian-managed pairing
+
+Keep `SUPABASE_SERVICE_ROLE_KEY` in the server environment; never use a public
+variable for it. No new tables or columns are needed.
+
+1. Sign in as the guardian and open **Connect a senior** on `/guardian`.
+2. Enter the existing senior account’s email and select **Connect senior**.
+3. Sign in as the senior in a separate browser profile or incognito window.
+   The senior enters no pairing code or phone number. While unlinked, the screen
+   says **Waiting for your guardian**; after connection it shows the normal status.
+
+The connection is saved in `profiles.guardian_id` and survives sign-out. Accounts,
+phone setup, and consent must be prepared beforehand. This flow does not create
+accounts or consent. Seniors connected to another guardian cannot be reassigned.
+
+For a repeatable demo, set `DEMO_SENIOR_ID=<senior-profile-uuid>` in root `.env`
+and restart Next.js. The connected guardian can select **Reset demo pairing**,
+confirm, and reconnect using the same email while the senior stays signed in.
+Reset preserves phone numbers, consent, and call history. Pairing changes are
+blocked during an active call. Both screens refresh automatically via Realtime
+with a five-second fallback. Replay a new demo call after reconnecting;
+historical calls retain their original guardian association.
 
 ## Dashboard behavior
 
@@ -47,8 +70,11 @@ senior, so their sessions remain separate.
 - Initial rows are loaded before live changes are merged. Events are scoped to
   the signed-in guardian/senior, deduplicated by row ID, and displayed by call SID.
   Snapshot loads buffer incoming events to avoid missing rows during loading.
-- Reconnects and returning to the browser tab reload the snapshot. The connection
-  indicator reports whether realtime is connected. The initial transcript load
+- Reconnects and returning to the browser tab reload the snapshot. While visible,
+  both dashboards also reconcile every five seconds so missed Realtime events do
+  not require a manual page refresh. Snapshot requests do not overlap. The
+  connection indicator shows Live for a subscribed channel and Auto-refresh
+  when the channel is unavailable. The initial transcript load
   is limited to 1,000 rows across the last 30 calls for this hackathon.
 - Simulated calls are visibly labeled on both screens. Acknowledging an alert
   marks it reviewed; it does not dismiss the senior's active warning.
@@ -145,3 +171,69 @@ existing voice test uses mocked backend calls and never places a phone call.
 
 References: [Supabase SSR setup](https://supabase.com/docs/guides/auth/server-side/nextjs)
 and [Realtime Postgres Changes](https://supabase.com/docs/guides/realtime/postgres-changes).
+
+## Guardian remote hangup
+
+On a real active call, the guardian dashboard shows **End call**. Select it, then
+confirm **Yes, end this call** to disconnect the conversation. **Keep call** cancels
+without affecting the phone call. This control does not block future calls from
+that number. Simulated `DEMO_` calls still finish through replay/reset scripts.
+
+The Next.js server needs `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and
+`SUPABASE_SERVICE_ROLE_KEY` from the root `.env` (already in `.env.example`).
+Restart Next.js after changing these. These keys are server-only; never prefix
+with `NEXT_PUBLIC_`. No additional packages or database schema changes are needed.
+
+`POST /api/calls/end` validates the signed-in guardian, checks call ownership
+through RLS and explicit filtering, then sends a Twilio call update. Only after
+Twilio confirms completion does it mark that call completed in Supabase. Failed
+hangup requests leave the stored status untouched; database sync failures after a
+successful hangup are reported separately. The Python backend is unchanged.
+
+Test with a consenting caller and the protected person's phone: answer a real
+bridged call, sign in as its guardian, select End call, test Keep call once, then
+confirm ending it. Both phones should disconnect and both dashboards should
+return to idle/ready. No live call is disconnected by local automated tests.
+
+```bash
+node --test tests/end-call.test.mjs
+```
+
+API reference: [Twilio call updates](https://www.twilio.com/docs/voice/api/call-resource#update-a-call-resource).
+
+
+## Guardian-managed pairing and repeatable demo
+
+The senior only signs in. An unpaired senior sees **Waiting for your guardian**;
+there are no pairing codes, email-entry forms, or invitation steps on that screen.
+On the guardian dashboard, expand **Connect a senior**, enter the senior's existing
+Supabase Auth account email, and select **Connect senior**. Both screens refresh
+their connection through Realtime, with a five-second fallback check.
+
+Pairing is saved in `profiles.guardian_id` and persists across logins. The existing
+senior profile must already have consent and phone setup; the guardian cannot
+create consent on someone else's behalf. Accounts and Twilio numbers are not
+created by this flow. A senior linked to another guardian cannot be reassigned.
+
+To repeat the demo, configure `DEMO_SENIOR_ID` in root `.env` and restart Next.js.
+The guardian can select **Reset demo pairing** and confirm. Reset is limited to
+the configured demo senior connected to that guardian. It removes the connection
+and clears the guardian's unused pairing code, preserving phone numbers, consent,
+and all historical call data. Changing pairing is blocked while that senior has
+an active call. A reset does not run automatically when you sign out.
+
+Demo sequence:
+1. Sign in as guardian and senior in separate browser profiles.
+2. Guardian resets the demo pairing; senior returns to the waiting screen.
+3. Guardian enters the senior's account email and selects Connect senior.
+4. Senior returns to ready with their guardian's call button, without typing.
+5. Sign out/in to verify the connection remains saved.
+
+The Next.js routes `/api/pair` and `/api/pair/reset` validate the guardian's
+session and use the existing server-only Supabase service key. There are no
+Python backend or database schema changes. These actions update only the pairing
+fields when you use the controls; automated tests use a fake database.
+
+```bash
+node --test tests/pairing.test.mjs
+```

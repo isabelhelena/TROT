@@ -81,6 +81,23 @@ def test_unit_mock():
         mock_update.assert_called_once_with("CA_test_mock_123", "in_progress")
         print(" Case 3 PASSED: Dial-status answered sets ParentCallSid to in_progress.")
 
+    # Case 3B: Dial Status Callback (No-Answer Fallback)
+    with (
+        patch("backend.main.update_call_status"),
+        patch("backend.main.complete_call") as mock_complete,
+    ):
+        res = client.post(
+            "/voice/dial-status",
+            data={
+                "CallSid": "CA_child_leg_456",
+                "ParentCallSid": "CA_test_mock_123",
+                "CallStatus": "no-answer",
+            },
+        )
+        assert res.status_code == 200
+        mock_complete.assert_called_once_with("CA_test_mock_123", "no_answer")
+        print(" Case 3B PASSED: Dial-status no-answer marks call as no_answer immediately.")
+
     # Case 4: Dial Complete Callback (No Answer)
     with patch("backend.main.complete_call") as mock_complete:
         res = client.post(

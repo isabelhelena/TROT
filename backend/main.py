@@ -173,6 +173,7 @@ async def handle_voice(request: Request):
         status_callback_event="answered completed",
     )
     twiml.append(dial)
+    twiml.hangup()
 
     return Response(content=str(twiml), media_type="application/xml")
 
@@ -296,6 +297,16 @@ async def handle_dial_status(request: Request):
         logger.info(
             f"[CALL_ANSWERED] ParentCallSid={parent_call_sid} -> Status set to in_progress"
         )
+    elif parent_call_sid and call_status in ("no-answer", "busy", "failed", "canceled"):
+        normalized = "no_answer" if call_status in ("no-answer", "canceled") else call_status
+        set_active_call_status(parent_call_sid, normalized)
+        try:
+            complete_call(parent_call_sid, normalized)
+            logger.info(
+                f"[CALL_ENDED_FROM_STATUS] ParentCallSid={parent_call_sid} -> Status set to {normalized}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to complete call {parent_call_sid} in dial-status: {e}")
 
     return Response(content="<Response/>", media_type="application/xml")
 
@@ -335,4 +346,6 @@ async def handle_dial_complete(request: Request):
         except Exception as e:
             logger.warning(f"Failed to complete call {call_sid} in DB: {e}")
 
-    return Response(content="<Response/>", media_type="application/xml")
+    twiml = VoiceResponse()
+    twiml.hangup()
+    return Response(content=str(twiml), media_type="application/xml")

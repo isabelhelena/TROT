@@ -295,3 +295,15 @@ Before demonstrating Phase 3:
   - Transcript lines appear line-by-line on Guardian dashboard.
   - When an alert is inserted, Guardian dashboard lights up with the alert box.
   - Senior screen flips from green "Protected" to red "Possible Scam Call" with the `tel:` button.
+
+## Hackathon implementation scope (agreed October 4, 2026)
+
+The implementation uses the reduced scope documented in the root README:
+email/password login for two pre-linked accounts; guardian call/transcript/alert
+views; senior ready/active/warning states; initial snapshots plus scoped Realtime;
+and `backend/scripts/demo_calls.py` replay/reset commands. Signup, OAuth, role
+selection, pairing endpoints, and suspicious-number management are deferred.
+The pairing examples above are planning material and are not implemented.
+The existing voice bridge and database schema remain unchanged. Real transcript,
+call lifecycle, and detection producers are separate backend work; simulated
+replay verifies the frontend without those dependencies.

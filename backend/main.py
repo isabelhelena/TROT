@@ -28,6 +28,24 @@ app = FastAPI(title="TROT Backend", version="0.1.0")
 call_states: Dict[str, Dict[str, Any]] = {}
 
 
+@app.get("/nay.mp3")
+@app.get("/audio/nay.mp3")
+async def get_nay_audio():
+    """Serves the security alert chime audio for Twilio <Play> tags."""
+    from fastapi.responses import FileResponse
+
+    nay_path = os.path.join(os.getcwd(), "public", "nay.mp3")
+    if not os.path.exists(nay_path):
+        nay_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "public",
+            "nay.mp3",
+        )
+    if os.path.exists(nay_path):
+        return FileResponse(nay_path, media_type="audio/mpeg")
+    return Response(status_code=404, content="Audio file not found")
+
+
 def get_public_base_url(request: Request) -> str:
     """Returns the base public URL, prioritizing PUBLIC_BASE_URL env var."""
     base_url = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")

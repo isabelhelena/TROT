@@ -270,29 +270,27 @@ sequenceDiagram
 ---
 
 ### Phase 4: Guardian Voice Buzz & Demo Polish
-**Status:** PLANNED
+**Status:** IN PROGRESS 🚀 (Twilio Voice Buzz active in `notify.py` and `alerts.py`)
 
-* **Objective:** Outbound telephony buzz to the guardian, seed realistic demo data, rehearse live demo scripts, and record backup video.
+* **Objective:** Real-time outbound telephony buzz to the guardian upon scam interception, completely exempt from US carrier A2P 10DLC restrictions and requiring zero external accounts (no Meta Business needed), seed realistic demo data, rehearse live demo scripts, and record backup video.
 * **Key Files:**
-  - `backend/services/notify.py`: Outbound Twilio voice buzz call.
-  - `backend/scripts/seed_demo_data.py`: Seeds past calls, suspicious numbers, and realistic history.
+  - `backend/services/notify.py`: Outbound Twilio Voice Buzz call (`send_guardian_voice_buzz`) with Amazon Polly neural voice alert.
+  - `backend/services/alerts.py`: Dispatches Voice Buzz to the linked guardian on the first confirmed scam detection.
+  - `backend/scripts/seed_demo_data.py`: Seeds past calls, suspicious numbers, and realistic history for the dashboard.
 * **Detailed Engineering Specs:**
-  1. **Outbound Buzz Call (`notify.py`):**
-     - When an alert is created for a call, place an outbound call to the guardian's verified phone:
-       ```python
-       twilio_client.calls.create(
-           to=guardian_phone,
-           from_=twilio_number,
-           twiml=f'''<Response>
-               <Say voice="Polly.Joanna-Neural">
-                   Alert from TROT: A potential scam call has been detected on your senior's phone. 
-                   The caller mentioned {scam_type}. Please check your dashboard immediately.
-               </Say>
-           </Response>'''
-       )
+  1. **Automated Voice Buzz Call (`notify.py`):**
+     - When an alert is created for a call, TROT immediately places an outbound call to the guardian's phone:
+       ```xml
+       <Response>
+         <Say voice="Polly.Joanna-Neural">
+           Security alert from TROT. A potential {clean_scam_type} scam was detected on {senior_name}'s phone and disconnected for safety. Please check your TROT guardian dashboard immediately.
+         </Say>
+         <Hangup/>
+       </Response>
        ```
+     - **Carrier Immunity:** Telephony voice calls are 100% exempt from A2P 10DLC registration, requires no Meta/business approvals, and rings the guardian's handset immediately.
   2. **Demo Seeding:** Pre-populates the database with 5 past legitimate calls and 3 flagged suspicious numbers so the dashboard looks rich and established during pitch judging.
-  3. **Rehearsal & Backup:** Rehearse the live 3-device demo (Scammer phone, Senior phone, Guardian laptop) and record an MP4 screen recording as insurance against network glitches.
+  3. **Rehearsal & Backup:** Rehearse the live 3-device demo (Scammer phone, Senior phone, Guardian laptop + phone) and record an MP4 screen recording as insurance against network glitches.
 
 ---
 

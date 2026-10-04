@@ -40,11 +40,14 @@ def test_unit_mock():
             },
         )
         assert res.status_code == 200, f"Expected 200, got {res.status_code}"
-        assert "<Dial>" in res.text and "+12105559999" in res.text, f"Missing Dial tag in: {res.text}"
+        assert "<Dial" in res.text and "+12105559999" in res.text, f"Missing Dial tag in: {res.text}"
+        assert 'timeout="15"' in res.text, "Dial must have timeout=15"
+        assert "action=" in res.text and "dial-complete" in res.text, "Dial must have action pointing to dial-complete"
+        assert "statusCallback=" in res.text and "dial-status" in res.text, "Number must have statusCallback pointing to dial-status"
         assert "callerId" not in res.text, "callerId must NOT be set on Dial!"
         mock_upsert.assert_called_once()
         mock_insert.assert_called_once()
-        print(" Case 1 PASSED: Known senior dialed correctly without callerId.")
+        print(" Case 1 PASSED: Known senior dialed correctly with timeout=15 and callbacks.")
         print(f"TwiML Output:\n{res.text}")
 
     # Case 2: Unknown Number
@@ -61,6 +64,46 @@ def test_unit_mock():
         assert "not configured" in res.text
         assert "<Hangup" in res.text
         print(" Case 2 PASSED: Unconfigured number rejected gracefully.")
+
+    # Case 3: Dial Status Callback (Answered)
+    with patch("backend.main.update_call_status") as mock_update:
+        res = client.post(
+            "/voice/dial-status",
+            data={
+                "CallSid": "CA_child_leg_456",
+                "ParentCallSid": "CA_test_mock_123",
+                "CallStatus": "in-progress",
+            },
+        )
+        assert res.status_code == 200
+        mock_update.assert_called_once_with("CA_test_mock_123", "in_progress")
+        print(" Case 3 PASSED: Dial-status answered sets ParentCallSid to in_progress.")
+
+    # Case 4: Dial Complete Callback (No Answer)
+    with patch("backend.main.complete_call") as mock_complete:
+        res = client.post(
+            "/voice/dial-complete",
+            data={
+                "CallSid": "CA_test_mock_123",
+                "DialCallStatus": "no-answer",
+            },
+        )
+        assert res.status_code == 200
+        mock_complete.assert_called_once_with("CA_test_mock_123", "no_answer")
+        print(" Case 4 PASSED: Dial-complete maps 'no-answer' to 'no_answer'.")
+
+    # Case 5: Dial Complete Callback (Completed)
+    with patch("backend.main.complete_call") as mock_complete:
+        res = client.post(
+            "/voice/dial-complete",
+            data={
+                "CallSid": "CA_test_mock_123",
+                "DialCallStatus": "completed",
+            },
+        )
+        assert res.status_code == 200
+        mock_complete.assert_called_once_with("CA_test_mock_123", "completed")
+        print(" Case 5 PASSED: Dial-complete maps 'completed' to 'completed'.")
 
 
 def test_live_server(
